@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import yaml
@@ -16,11 +17,19 @@ from skills import register_skills
 
 # --- Config ---
 VAULT_PATH = Path(os.getenv("OBSIDIAN_VAULT_PATH", "~/Documents/Obsidian Vault")).resolve()
-CHATS_FOLDER = os.getenv("OBSIDIAN_CHATS_FOLDER", "Chats")
+CHATS_FOLDER = os.getenv("OBSIDIAN_CHATS_FOLDER", "Claude/Chats")
 DAILY_FOLDER = os.getenv("OBSIDIAN_DAILY_FOLDER", "Daily")
 
 STOP_WORDS = {"the", "a", "an", "and", "or", "of", "in", "to"}
 GENERIC_TAGS = {"chat", "claude", "conversation", "ai", "note"}
+CONTENT_STOP = STOP_WORDS | {
+    "about", "their", "there", "which", "would", "could", "should",
+    "after", "before", "where", "what", "with", "from", "have",
+    "that", "this", "some", "been", "were", "will", "into", "over",
+    "more", "than", "them", "then", "they", "also", "each", "your",
+    "using", "being", "when", "these", "those", "other", "between",
+    "notes", "claude", "obsidian", "section", "content", "value",
+}
 
 mcp = FastMCP("obsidian")
 register_skills(mcp)
@@ -93,8 +102,20 @@ def _append_note(p: Path, content: str, add_separator: bool) -> None:
         p.write_text(content, encoding="utf-8")
 
 
+def _body_words(p: Path) -> set[str]:
+    """Extract meaningful words from a note's body (first 1500 chars, 5+ chars, alpha only)."""
+    try:
+        text = p.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return set()
+    if text.startswith("---\n"):
+        end = text.find("\n---", 4)
+        text = text[end + 4:] if end != -1 else text
+    return {w for w in re.findall(r"[a-z]{5,}", text[:1500].lower()) if w not in CONTENT_STOP}
+
+
 def _find_related_core(path_str: str, top_k: int = 10, folder: str = "", min_score: float = 0.05) -> dict:
-    """Core IDF tag-based similarity computation. Returns {"source": path_str, "related": [...]}."""
+    """Core similarity computation (IDF tags + title words + body content). Returns {"source": path_str, "related": [...]}."""
     target = vault_path(path_str)
     if not target.exists():
         raise ToolError(f"Note not found: {path_str}")
@@ -119,17 +140,23 @@ def _find_related_core(path_str: str, top_k: int = 10, folder: str = "", min_sco
 
     target_fm = _parse_frontmatter(target) or {}
     target_tags = _norm_tags(target_fm.get("tags", []))
-    target_words = set(re.findall(r"\w+", target.stem.lower())) - STOP_WORDS
+    target_words = set(re.findall(r"[a-z]+", target.stem.lower())) - STOP_WORDS
+    target_body_words = _body_words(target)
 
     results = []
     for md_file, note_tags in all_notes:
         if md_file.resolve() == target.resolve():
             continue
-        shared = target_tags & note_tags
+        # Exclude generic tags from scoring entirely so they never contribute to relevance
+        shared = (target_tags & note_tags) - GENERIC_TAGS
         tag_score = sum(1.0 / tag_freq[t] for t in shared)
-        note_words = set(re.findall(r"\w+", md_file.stem.lower())) - STOP_WORDS
+        note_words = set(re.findall(r"[a-z]+", md_file.stem.lower())) - STOP_WORDS
         title_score = len(target_words & note_words) * 0.1
-        score = round(tag_score + title_score, 2)
+        content_score = len(target_body_words & _body_words(md_file)) * 0.03
+        score = round(tag_score + title_score + content_score, 2)
+        # Dampen same-folder matches — co-located notes need much stronger signal to link
+        if md_file.parent == target.parent:
+            score = round(score * 0.4, 2)
         if score > 0 and score >= min_score:
             rel = str(md_file.relative_to(VAULT_PATH))
             results.append({
@@ -156,6 +183,11 @@ def _patch_section(p: Path, match: str, match_type: str, content: str,
             return "not_found"
         p.write_text(text.replace(match, content, 1), encoding="utf-8")
         return "ok"
+
+    if match_type == "section":
+        # Remove the entire heading + body (content is ignored)
+        removed = _remove_section(p, match, heading_level=heading_level)
+        return "ok" if removed else "not_found"
 
     # match_type == "heading"
     heading_re = re.compile(r'^(#{1,6})\s+(.*?)\s*$')
@@ -211,9 +243,9 @@ def _passes_tag_filter(shared_tags: list[str], target_stem: str, note_stem: str)
     """Return True if the match is genuine — not just generic-tag overlap."""
     if any(t not in GENERIC_TAGS for t in shared_tags):
         return True
-    # Fall back to title word overlap
-    t_words = set(re.findall(r"\w+", target_stem.lower())) - STOP_WORDS
-    n_words = set(re.findall(r"\w+", note_stem.lower())) - STOP_WORDS
+    # Fall back to title word overlap (alpha only — exclude date numbers like 2026, 03)
+    t_words = set(re.findall(r"[a-z]+", target_stem.lower())) - STOP_WORDS
+    n_words = set(re.findall(r"[a-z]+", note_stem.lower())) - STOP_WORDS
     return bool(t_words & n_words)
 
 
@@ -296,6 +328,51 @@ def _apply_relink(note_path: Path, new_entries: list[str]) -> str:
     merged = "\n".join(valid_existing + to_add)
     _patch_section(note_path, "Related", "heading", merged, heading_level=2, create_if_missing=True)
     return "updated"
+
+
+def _remove_section(p: Path, match: str, heading_level: int | None = None) -> bool:
+    """Remove an entire heading section (heading line + body). Returns True if found."""
+    if not p.exists():
+        return False
+    text = p.read_text(encoding="utf-8")
+    heading_re = re.compile(r'^(#{1,6})\s+(.*?)\s*$')
+    lines = text.splitlines(keepends=True)
+    found_idx = None
+    found_level = None
+    for i, line in enumerate(lines):
+        m = heading_re.match(line.rstrip("\n").rstrip("\r"))
+        if m:
+            lvl = len(m.group(1))
+            if m.group(2).lower() == match.lower():
+                if heading_level is None or lvl == heading_level:
+                    found_idx = i
+                    found_level = lvl
+                    break
+    if found_idx is None:
+        return False
+    end_idx = len(lines)
+    for i in range(found_idx + 1, len(lines)):
+        m = heading_re.match(lines[i].rstrip("\n").rstrip("\r"))
+        if m and len(m.group(1)) <= found_level:
+            end_idx = i
+            break
+    prefix = "".join(lines[:found_idx]).rstrip("\n")
+    suffix = "".join(lines[end_idx:])
+    new_text = (prefix + "\n" if prefix else "") + suffix
+    p.write_text(new_text, encoding="utf-8")
+    return True
+
+
+def _capture_related_state(note_path: Path) -> dict:
+    """Snapshot the current ## Related section state of a note for undo."""
+    text = note_path.read_text(encoding="utf-8") if note_path.exists() else ""
+    lines, _ = _read_existing_related(text)
+    had = bool(re.search(r'^#{1,6}\s+Related\s*$', text, re.MULTILINE | re.IGNORECASE))
+    return {
+        "path": str(note_path.relative_to(VAULT_PATH)),
+        "had_section": had,
+        "section_content": "\n".join(lines) if had else None,
+    }
 
 
 # --- Tools ---
@@ -554,7 +631,7 @@ def obsidian_search(
 @mcp.tool()
 def obsidian_batch(operations: list[dict], confirm: bool = False) -> dict:
     """Preferred for 2+ write/move/delete/append ops — one tool call. confirm=True covers all deletes in the batch. No rollback on partial failure."""
-    VALID_OPS = {"write", "move", "delete", "append", "find_related"}
+    VALID_OPS = {"write", "move", "delete", "append", "find_related", "patch_section"}
     for i, op in enumerate(operations):
         op_type = op.get("op")
         if op_type not in VALID_OPS:
@@ -590,6 +667,20 @@ def obsidian_batch(operations: list[dict], confirm: bool = False) -> dict:
                 p = vault_path(op["path"])
                 _delete_note(p)
                 results.append({"index": i, "p": op["path"], "ok": True})
+            elif op_type == "patch_section":
+                p = vault_path(op["path"])
+                match_type = op.get("match_type", "heading")
+                if match_type not in ("heading", "text", "section"):
+                    raise ToolError(f"Operation {i}: match_type must be 'heading', 'text', or 'section'")
+                status = _patch_section(
+                    p,
+                    op["match"],
+                    match_type,
+                    op.get("content", ""),
+                    heading_level=op.get("heading_level"),
+                    create_if_missing=op.get("create_if_missing", True),
+                )
+                results.append({"index": i, "p": op["path"], "ok": True, "status": status})
             elif op_type == "find_related":
                 # find_related errors are per-op, never abort the batch
                 try:
@@ -694,20 +785,104 @@ def obsidian_find_related(
 def obsidian_patch_section(
     path: str,
     match: str,
-    match_type: Literal["heading", "text"],
-    content: str,
+    match_type: Literal["heading", "text", "section"],
+    content: str = "",
     heading_level: int | None = None,
     create_if_missing: bool = True,
 ) -> dict:
-    """Surgical content editor. match_type='heading': find a heading by title (case-insensitive) and replace its body, preserving the heading line itself. match_type='text': raw find-and-replace for the first exact occurrence of match. heading_level (1–6) narrows heading matches to a specific level; None matches any level. create_if_missing=True (default) appends a new heading+content if not found (heading only). Returns status: 'ok' (replaced), 'created' (appended new section), or 'not_found' (no-op)."""
+    """Surgical content editor. match_type='heading': replace a heading's body, preserving the heading line itself. match_type='section': delete the entire heading + body (content is ignored). match_type='text': raw find-and-replace for the first exact occurrence. heading_level (1–6) narrows heading matches to a specific level; None matches any level. create_if_missing=True (default, heading only) appends a new section if not found. Returns status: 'ok', 'created', or 'not_found'."""
     p = vault_path(path)
     status = _patch_section(p, match, match_type, content, heading_level=heading_level, create_if_missing=create_if_missing)
     return {"p": path, "status": status}
 
 
+def _ai_verify_candidates(target_path: Path, candidates: list[dict]) -> list[dict]:
+    """Call Claude Haiku to verify which candidates are genuinely related to target. Returns filtered list."""
+    try:
+        import anthropic
+    except ImportError:
+        raise ToolError("smart=True requires the 'anthropic' package: pip install anthropic")
+
+    def _full_content(p: Path) -> str:
+        try:
+            return p.read_text(encoding="utf-8")[:3000]
+        except (OSError, UnicodeDecodeError):
+            return ""
+
+    target_content = _full_content(target_path)
+    lines = [
+        f'SOURCE NOTE: "{target_path.stem}"\n{target_content}\n',
+        "CANDIDATE NOTES (evaluate each for genuine relatedness):\n",
+    ]
+    for i, c in enumerate(candidates, 1):
+        cpath = VAULT_PATH / c["p"]
+        content = _full_content(cpath)
+        lines.append(f'[{i}] "{c["title"]}"\n{content}\n')
+
+    prompt = (
+        "You are an Obsidian PKM assistant. Given the source note and a list of candidates, "
+        "return a JSON array of 1-based indices for candidates that are GENUINELY related to the source — "
+        "meaning they share specific topics, workflows, projects, or concepts (not just generic themes like 'productivity' or 'AI'). "
+        "Be selective: fewer high-quality links are better than many weak ones. "
+        "Notes merely in the same general domain should NOT be included unless there is specific conceptual overlap.\n\n"
+        "Reply with ONLY a JSON array, e.g.: [1, 3, 5]\n\n"
+        + "\n".join(lines)
+    )
+
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = response.content[0].text.strip()
+    try:
+        indices = json.loads(text)
+        return [candidates[i - 1] for i in indices if isinstance(i, int) and 1 <= i <= len(candidates)]
+    except Exception:
+        # Parsing failed — safe fallback: return all candidates unfiltered
+        return candidates
+
+
 @mcp.tool()
-def obsidian_relink(mode: Literal["normal", "full"] = "normal", min_score: float = 0.3) -> dict:
-    """Automate building and maintaining ## Related sections across notes. mode='normal': updates only the most recently modified note in Claude/Chats/ (one-directional). mode='full': scans all notes in the vault, applies bidirectional links (if A links to B, B also links back to A), and reports a summary. Filters out matches based only on generic tags (chat, claude, conversation, ai, note). Merge logic: preserves existing valid links, strips dead links, appends only new unique entries. min_score default 0.3 reduces noise."""
+def obsidian_relink(
+    mode: Literal["normal", "full", "undo"] = "normal",
+    min_score: float = 0.3,
+    exclude_folders: list[str] | None = None,
+    smart: bool = False,
+) -> dict:
+    """Automate building and maintaining ## Related sections across notes. mode='normal': updates only the most recently modified note in Claude/Chats/. mode='full': scans all notes in the vault (one-directional) and reports a summary. mode='undo': restores all notes to their state before the last run. exclude_folders: list of vault-relative folder paths to skip entirely (neither source nor target). smart=True: reads full file content and uses Claude AI to verify each candidate link is genuinely related — slower but much higher quality. Same-folder notes are score-dampened (0.4x) to reduce project-folder noise. Scoring uses shared tags (IDF) + title word overlap + body content overlap — generic tags (chat, claude, ai, note, conversation) are excluded from scoring. min_score default 0.3."""
+    undo_file = VAULT_PATH / ".relink-undo.json"
+    excluded = [f.replace("\\", "/").rstrip("/") for f in (exclude_folders or [])]
+
+    def _is_excluded(rel_path: str) -> bool:
+        fwd = rel_path.replace("\\", "/")
+        return any(fwd == ex or fwd.startswith(ex + "/") for ex in excluded)
+
+    if mode == "undo":
+        if not undo_file.exists():
+            return {"mode": "undo", "status": "no_backup_found"}
+        backup = json.loads(undo_file.read_text(encoding="utf-8"))
+        restored = 0
+        skipped = 0
+        for entry in backup["entries"]:
+            try:
+                p = vault_path(entry["path"])
+                if not p.exists():
+                    skipped += 1
+                    continue
+                if entry["had_section"]:
+                    _patch_section(p, "Related", "heading", entry["section_content"] or "",
+                                   heading_level=2, create_if_missing=True)
+                else:
+                    _remove_section(p, "Related", heading_level=2)
+                restored += 1
+            except Exception:
+                skipped += 1
+        undo_file.unlink(missing_ok=True)
+        return {"mode": "undo", "restored": restored, "skipped": skipped,
+                "from_timestamp": backup.get("timestamp")}
+
     chats_path = vault_path(CHATS_FOLDER)
 
     if mode == "normal":
@@ -721,14 +896,22 @@ def obsidian_relink(mode: Literal["normal", "full"] = "normal", min_score: float
             return {"mode": "normal", "note": None, "status": "no_notes_found"}
         target = max(notes, key=lambda f: f.stat().st_mtime)
         target_str = str(target.relative_to(VAULT_PATH))
-        result = _find_related_core(target_str, top_k=10, min_score=min_score)
-        entries = [
-            _format_related_entry(r["title"], r["shared_tags"])
-            for r in result["related"]
-            if _passes_tag_filter(r["shared_tags"], target.stem, Path(r["p"]).stem)
+        heuristic_min = 0.05 if smart else min_score
+        result = _find_related_core(target_str, top_k=20 if smart else 10, min_score=heuristic_min)
+        related = [
+            r for r in result["related"]
+            if not _is_excluded(r["p"])
+            and _passes_tag_filter(r["shared_tags"], target.stem, Path(r["p"]).stem)
         ]
+        if smart and related:
+            related = _ai_verify_candidates(target, related)
+        entries = [_format_related_entry(r["title"], r["shared_tags"]) for r in related]
         if not entries:
             return {"mode": "normal", "note": target_str, "status": "no_matches"}
+        # Save undo snapshot before patching
+        backup = {"timestamp": datetime.now().isoformat(), "mode": "normal",
+                  "entries": [_capture_related_state(target)]}
+        undo_file.write_text(json.dumps(backup, indent=2), encoding="utf-8")
         status = _apply_relink(target, entries)
         return {"mode": "normal", "note": target_str, "status": status, "links_considered": len(entries)}
 
@@ -736,41 +919,49 @@ def obsidian_relink(mode: Literal["normal", "full"] = "normal", min_score: float
     all_notes = [
         f for f in VAULT_PATH.rglob("*.md")
         if not any(part.startswith(".") for part in f.relative_to(VAULT_PATH).parts)
+        and not _is_excluded(str(f.relative_to(VAULT_PATH)))
     ]
 
-    # Collect forward links: note_path_str → [(title, shared_tags, rel_path_str)]
-    forward: dict[str, list[tuple[str, list[str], str]]] = {}
+    # Collect forward links: note_path_str → [(title, shared_tags)]
+    forward: dict[str, list[tuple[str, list[str]]]] = {}
     errors: list[dict] = []
     no_matches = 0
 
+    heuristic_min = 0.05 if smart else min_score
     for note_file in all_notes:
         note_str = str(note_file.relative_to(VAULT_PATH))
         try:
-            result = _find_related_core(note_str, top_k=5, min_score=min_score)
+            result = _find_related_core(note_str, top_k=20 if smart else 10, min_score=heuristic_min)
         except Exception as e:
             errors.append({"p": note_str, "error": str(e)})
             continue
-        filtered = [
-            (r["title"], r["shared_tags"], r["p"])
-            for r in result["related"]
-            if _passes_tag_filter(r["shared_tags"], note_file.stem, Path(r["p"]).stem)
+        related = [
+            r for r in result["related"]
+            if not _is_excluded(r["p"])
+            and _passes_tag_filter(r["shared_tags"], note_file.stem, Path(r["p"]).stem)
         ]
+        if smart and related:
+            try:
+                related = _ai_verify_candidates(note_file, related)
+            except Exception as e:
+                errors.append({"p": note_str, "error": f"AI verify failed: {e}"})
+                related = []
+        filtered = [(r["title"], r["shared_tags"]) for r in related]
         if filtered:
             forward[note_str] = filtered
         else:
             no_matches += 1
 
-    # Build bidirectional link map: note_path_str → [(title, shared_tags)]
-    all_links: dict[str, list[tuple[str, list[str]]]] = {}
-    for src, entries in forward.items():
-        all_links.setdefault(src, []).extend((t, tags) for t, tags, _ in entries)
-        src_stem = Path(src).stem
-        for title, tags, dst in entries:
-            all_links.setdefault(dst, []).append((src_stem, tags))
+    # Save undo snapshot before patching
+    backup_entries = [_capture_related_state(vault_path(ns)) for ns in forward]
+    undo_file.write_text(
+        json.dumps({"timestamp": datetime.now().isoformat(), "mode": "full", "entries": backup_entries}, indent=2),
+        encoding="utf-8",
+    )
 
     updated = 0
     no_change = 0
-    for note_str, entries in all_links.items():
+    for note_str, entries in forward.items():
         try:
             note_file = vault_path(note_str)
             formatted = [_format_related_entry(title, tags) for title, tags in entries]
