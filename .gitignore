@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.claude/
+
+# Temp QA artifacts
+_gen_test.py
+_gen_tests.py
+test_template.py
+test_new_features_content.txt
