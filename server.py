@@ -796,52 +796,16 @@ def obsidian_patch_section(
     return {"p": path, "status": status}
 
 
-def _ai_verify_candidates(target_path: Path, candidates: list[dict]) -> list[dict]:
-    """Call Claude Haiku to verify which candidates are genuinely related to target. Returns filtered list."""
+def _read_full_content(p: Path) -> str:
+    """Read full note content, stripping frontmatter."""
     try:
-        import anthropic
-    except ImportError:
-        raise ToolError("smart=True requires the 'anthropic' package: pip install anthropic")
-
-    def _full_content(p: Path) -> str:
-        try:
-            return p.read_text(encoding="utf-8")[:3000]
-        except (OSError, UnicodeDecodeError):
-            return ""
-
-    target_content = _full_content(target_path)
-    lines = [
-        f'SOURCE NOTE: "{target_path.stem}"\n{target_content}\n',
-        "CANDIDATE NOTES (evaluate each for genuine relatedness):\n",
-    ]
-    for i, c in enumerate(candidates, 1):
-        cpath = VAULT_PATH / c["p"]
-        content = _full_content(cpath)
-        lines.append(f'[{i}] "{c["title"]}"\n{content}\n')
-
-    prompt = (
-        "You are an Obsidian PKM assistant. Given the source note and a list of candidates, "
-        "return a JSON array of 1-based indices for candidates that are GENUINELY related to the source — "
-        "meaning they share specific topics, workflows, projects, or concepts (not just generic themes like 'productivity' or 'AI'). "
-        "Be selective: fewer high-quality links are better than many weak ones. "
-        "Notes merely in the same general domain should NOT be included unless there is specific conceptual overlap.\n\n"
-        "Reply with ONLY a JSON array, e.g.: [1, 3, 5]\n\n"
-        + "\n".join(lines)
-    )
-
-    client = anthropic.Anthropic()
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=200,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = response.content[0].text.strip()
-    try:
-        indices = json.loads(text)
-        return [candidates[i - 1] for i in indices if isinstance(i, int) and 1 <= i <= len(candidates)]
-    except Exception:
-        # Parsing failed — safe fallback: return all candidates unfiltered
-        return candidates
+        text = p.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    if text.startswith("---\n"):
+        end = text.find("\n---", 4)
+        text = text[end + 4:] if end != -1 else text
+    return text.strip()
 
 
 @mcp.tool()
@@ -851,7 +815,7 @@ def obsidian_relink(
     exclude_folders: list[str] | None = None,
     smart: bool = False,
 ) -> dict:
-    """Automate building and maintaining ## Related sections across notes. mode='normal': updates only the most recently modified note in Claude/Chats/. mode='full': scans all notes in the vault (one-directional) and reports a summary. mode='undo': restores all notes to their state before the last run. exclude_folders: list of vault-relative folder paths to skip entirely (neither source nor target). smart=True: reads full file content and uses Claude AI to verify each candidate link is genuinely related — slower but much higher quality. Same-folder notes are score-dampened (0.4x) to reduce project-folder noise. Scoring uses shared tags (IDF) + title word overlap + body content overlap — generic tags (chat, claude, ai, note, conversation) are excluded from scoring. min_score default 0.3."""
+    """Automate building and maintaining ## Related sections across notes. mode='normal': updates only the most recently modified note in Claude/Chats/. mode='full': scans all notes in the vault (one-directional) and reports a summary. mode='undo': restores all notes to their state before the last run. exclude_folders: list of vault-relative folder paths to skip entirely (neither source nor target). smart=True (normal mode only): returns the target note and all heuristic candidates with their full content for the caller to evaluate — does NOT write anything; caller should review and use obsidian_patch_section to write the Related section. Same-folder notes are score-dampened (0.4x) to reduce project-folder noise. Scoring uses shared tags (IDF) + title word overlap + body content overlap — generic tags (chat, claude, ai, note, conversation) are excluded from scoring. min_score default 0.3."""
     undo_file = VAULT_PATH / ".relink-undo.json"
     excluded = [f.replace("\\", "/").rstrip("/") for f in (exclude_folders or [])]
 
@@ -903,8 +867,25 @@ def obsidian_relink(
             if not _is_excluded(r["p"])
             and _passes_tag_filter(r["shared_tags"], target.stem, Path(r["p"]).stem)
         ]
-        if smart and related:
-            related = _ai_verify_candidates(target, related)
+        if smart:
+            # Return full content for the caller (Claude) to evaluate — no writes
+            return {
+                "mode": "normal",
+                "smart": True,
+                "status": "review_pending",
+                "target": target_str,
+                "target_content": _read_full_content(target),
+                "candidates": [
+                    {**r, "content": _read_full_content(VAULT_PATH / r["p"])}
+                    for r in related
+                ],
+                "instruction": (
+                    "Review the target note and each candidate's full content. "
+                    "Select only candidates that are GENUINELY related (specific topic/concept/workflow overlap, not just generic domain similarity). "
+                    "Then call obsidian_patch_section with path=target, match='Related', match_type='heading', heading_level=2 "
+                    "and content as a bullet list of [[wikilinks]] for the verified candidates."
+                ),
+            }
         entries = [_format_related_entry(r["title"], r["shared_tags"]) for r in related]
         if not entries:
             return {"mode": "normal", "note": target_str, "status": "no_matches"}
@@ -927,11 +908,13 @@ def obsidian_relink(
     errors: list[dict] = []
     no_matches = 0
 
-    heuristic_min = 0.05 if smart else min_score
+    if smart:
+        raise ToolError("smart=True is only supported with mode='normal'")
+
     for note_file in all_notes:
         note_str = str(note_file.relative_to(VAULT_PATH))
         try:
-            result = _find_related_core(note_str, top_k=20 if smart else 10, min_score=heuristic_min)
+            result = _find_related_core(note_str, top_k=10, min_score=min_score)
         except Exception as e:
             errors.append({"p": note_str, "error": str(e)})
             continue
@@ -940,12 +923,6 @@ def obsidian_relink(
             if not _is_excluded(r["p"])
             and _passes_tag_filter(r["shared_tags"], note_file.stem, Path(r["p"]).stem)
         ]
-        if smart and related:
-            try:
-                related = _ai_verify_candidates(note_file, related)
-            except Exception as e:
-                errors.append({"p": note_str, "error": f"AI verify failed: {e}"})
-                related = []
         filtered = [(r["title"], r["shared_tags"]) for r in related]
         if filtered:
             forward[note_str] = filtered
