@@ -542,6 +542,125 @@ MOC_TESTS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# T-SAVECHAT: custom_date + batch save_chat
+# ---------------------------------------------------------------------------
+
+def _mock_generate_summary(content):
+    return ("mock l0", "mock l1")
+
+
+def test_savechat_custom_date():
+    orig = server._generate_summary
+    server._generate_summary = _mock_generate_summary
+    try:
+        with temp_vault() as vault:
+            result = server.obsidian_save_chat(
+                title="Old Chat",
+                summary="a summary",
+                content="some content",
+                custom_date="2025-06-15",
+            )
+            assert not result["appended"], result
+            # filename uses YYYY-DD-MM format
+            assert "2025-15-06" in result["p"], f"expected 2025-15-06 in path, got: {result['p']}"
+            # frontmatter date matches (YAML may quote the value)
+            note_path = vault / result["p"]
+            text = note_path.read_text(encoding="utf-8")
+            assert "2025-15-06" in text, f"date not in frontmatter:\n{text[:300]}"
+            record("T-SAVECHAT-01: custom_date sets filename and frontmatter date", True)
+    except Exception as e:
+        record("T-SAVECHAT-01: custom_date sets filename and frontmatter date", False, str(e))
+    finally:
+        server._generate_summary = orig
+
+
+def test_savechat_invalid_custom_date():
+    with temp_vault():
+        try:
+            server.obsidian_save_chat(
+                title="Bad Date",
+                summary="x",
+                content="y",
+                custom_date="15/06/2025",
+            )
+            record("T-SAVECHAT-02: invalid custom_date raises ToolError", False, "no error raised")
+        except ToolError:
+            record("T-SAVECHAT-02: invalid custom_date raises ToolError", True)
+        except Exception as e:
+            record("T-SAVECHAT-02: invalid custom_date raises ToolError", False, str(e))
+
+
+def test_savechat_batch_single():
+    orig = server._generate_summary
+    server._generate_summary = _mock_generate_summary
+    try:
+        with temp_vault() as vault:
+            result = server.obsidian_batch(operations=[{
+                "op": "save_chat",
+                "title": "Batch Chat",
+                "summary": "batch summary",
+                "content": "batch content",
+                "custom_date": "2024-03-10",
+            }])
+            assert result["success_count"] == 1, result
+            r = result["results"][0]
+            assert r["ok"], r
+            assert "2024-10-03" in r["p"], f"expected 2024-10-03 in path, got: {r['p']}"
+            note_path = vault / r["p"]
+            assert note_path.exists(), f"note not created at {note_path}"
+            record("T-SAVECHAT-03: batch save_chat creates note with custom_date", True)
+    except Exception as e:
+        record("T-SAVECHAT-03: batch save_chat creates note with custom_date", False, str(e))
+    finally:
+        server._generate_summary = orig
+
+
+def test_savechat_batch_two_dates():
+    orig = server._generate_summary
+    server._generate_summary = _mock_generate_summary
+    try:
+        with temp_vault() as vault:
+            result = server.obsidian_batch(operations=[
+                {"op": "save_chat", "title": "Chat A", "summary": "s", "content": "c", "custom_date": "2023-01-15"},
+                {"op": "save_chat", "title": "Chat B", "summary": "s", "content": "c", "custom_date": "2022-11-30"},
+            ])
+            assert result["success_count"] == 2, result
+            paths = [r["p"] for r in result["results"]]
+            assert any("2023-15-01" in p for p in paths), f"Chat A date not found in {paths}"
+            assert any("2022-30-11" in p for p in paths), f"Chat B date not found in {paths}"
+            record("T-SAVECHAT-04: batch with two save_chat ops creates both notes", True)
+    except Exception as e:
+        record("T-SAVECHAT-04: batch with two save_chat ops creates both notes", False, str(e))
+    finally:
+        server._generate_summary = orig
+
+
+def test_savechat_batch_missing_required():
+    with temp_vault():
+        try:
+            server.obsidian_batch(operations=[{
+                "op": "save_chat",
+                "title": "No Content",
+                "summary": "s",
+                # missing 'content'
+            }])
+            record("T-SAVECHAT-05: batch save_chat missing required key raises ToolError", False, "no error raised")
+        except ToolError:
+            record("T-SAVECHAT-05: batch save_chat missing required key raises ToolError", True)
+        except Exception as e:
+            record("T-SAVECHAT-05: batch save_chat missing required key raises ToolError", False, str(e))
+
+
+SAVECHAT_TESTS = [
+    ("T-SAVECHAT-01: custom_date sets filename and frontmatter date", test_savechat_custom_date),
+    ("T-SAVECHAT-02: invalid custom_date raises ToolError", test_savechat_invalid_custom_date),
+    ("T-SAVECHAT-03: batch save_chat creates note with custom_date", test_savechat_batch_single),
+    ("T-SAVECHAT-04: batch with two save_chat ops, different dates", test_savechat_batch_two_dates),
+    ("T-SAVECHAT-05: batch save_chat missing required key raises ToolError", test_savechat_batch_missing_required),
+]
+
+
 if __name__ == "__main__":
     print()
     print("=" * 68)
@@ -571,6 +690,11 @@ if __name__ == "__main__":
     print("")
     print("--- T-MOC: MOC detection and relink suppression ---")
     for name, fn in MOC_TESTS:
+        run_test(name, fn)
+
+    print("")
+    print("--- T-SAVECHAT: custom_date + batch save_chat ---")
+    for name, fn in SAVECHAT_TESTS:
         run_test(name, fn)
 
     passing = sum(1 for _, ok, _ in RESULTS if ok)

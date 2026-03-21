@@ -726,8 +726,7 @@ def obsidian_list_folder(
     return {"folder": folder or "/", "items": items}
 
 
-@mcp.tool()
-def obsidian_save_chat(
+def _save_chat_core(
     title: str,
     summary: str,
     content: str,
@@ -736,16 +735,21 @@ def obsidian_save_chat(
     folder: str = "",
     l0: str = "",
     l1: str = "",
+    custom_date: str | None = None,
 ) -> dict:
-    """Save a Claude conversation. content: ultra-dense structured notation for machine retrieval."""
     tags = tags or []
+    if custom_date:
+        try:
+            today = date.fromisoformat(custom_date)
+        except ValueError:
+            raise ToolError(f"custom_date must be YYYY-MM-DD, got: {custom_date!r}")
+    else:
+        today = date.today()
     target_folder = folder or CHATS_FOLDER
-    today = date.today()
     filename = f"{today.strftime('%Y-%d-%m')} {title}.md"
     p = vault_path(f"{target_folder}/{filename}")
     p.parent.mkdir(parents=True, exist_ok=True)
 
-    # Auto-generate l0/l1 if not provided
     if not l0 or not l1:
         gen_l0, gen_l1 = _generate_summary(content)
         if not l0:
@@ -780,6 +784,22 @@ def obsidian_save_chat(
         full = f"{frontmatter}\n\n# {title}\n\n{content}"
         p.write_text(full, encoding="utf-8")
         return {"p": str(p.relative_to(VAULT_PATH)), "appended": False}
+
+
+@mcp.tool()
+def obsidian_save_chat(
+    title: str,
+    summary: str,
+    content: str,
+    tags: list[str] | None = None,
+    project: str = "",
+    folder: str = "",
+    l0: str = "",
+    l1: str = "",
+    custom_date: str | None = None,
+) -> dict:
+    """Save a Claude conversation. custom_date: YYYY-MM-DD to override today's date (for saving old chats)."""
+    return _save_chat_core(title, summary, content, tags, project, folder, l0, l1, custom_date)
 
 
 @mcp.tool()
@@ -862,18 +882,23 @@ def obsidian_search(
 @mcp.tool()
 def obsidian_batch(operations: list[dict], confirm: bool = False) -> dict:
     """Preferred for 2+ write/move/delete/append ops — one tool call."""
-    VALID_OPS = {"write", "move", "delete", "append", "find_related", "patch_section"}
+    VALID_OPS = {"write", "move", "delete", "append", "find_related", "patch_section", "save_chat"}
     for i, op in enumerate(operations):
         op_type = op.get("op")
         if op_type not in VALID_OPS:
             raise ToolError(f"Operation {i}: invalid op '{op_type}'. Must be one of {VALID_OPS}")
-        path = op.get("path")
-        if not isinstance(path, str) or not path:
-            raise ToolError(f"Operation {i}: 'path' must be a non-empty string")
+        if op_type != "save_chat":
+            path = op.get("path")
+            if not isinstance(path, str) or not path:
+                raise ToolError(f"Operation {i}: 'path' must be a non-empty string")
         if op_type == "move":
             to = op.get("to")
             if not isinstance(to, str) or not to:
                 raise ToolError(f"Operation {i}: 'to' must be a non-empty string for move")
+        if op_type == "save_chat":
+            for req in ("title", "summary", "content"):
+                if not op.get(req):
+                    raise ToolError(f"Operation {i}: save_chat requires '{req}'")
 
     def _do_write(op):
         p = vault_path(op["path"])
@@ -925,6 +950,20 @@ def obsidian_batch(operations: list[dict], confirm: bool = False) -> dict:
         except Exception as e:
             return {"index": op["_i"], "p": op["path"], "ok": False, "error": str(e)}
 
+    def _do_save_chat(op):
+        result = _save_chat_core(
+            title=op["title"],
+            summary=op["summary"],
+            content=op["content"],
+            tags=op.get("tags"),
+            project=op.get("project", ""),
+            folder=op.get("folder", ""),
+            l0=op.get("l0", ""),
+            l1=op.get("l1", ""),
+            custom_date=op.get("custom_date"),
+        )
+        return {"index": op["_i"], "ok": True, **result}
+
     OPS = {
         "write": _do_write,
         "append": _do_append,
@@ -932,6 +971,7 @@ def obsidian_batch(operations: list[dict], confirm: bool = False) -> dict:
         "delete": _do_delete,
         "patch_section": _do_patch_section,
         "find_related": _do_find_related,
+        "save_chat": _do_save_chat,
     }
 
     results = []
