@@ -1259,12 +1259,12 @@ def obsidian_graph_walk(
 
 @mcp.tool()
 def obsidian_relink(
-    mode: Literal["normal", "full", "undo"] = "normal",
+    mode: Literal["normal", "extended", "full", "undo"] = "normal",
     min_score: float = RELINK_MIN_SCORE,
     exclude_folders: list[str] | None = None,
     smart: bool = False,
 ) -> dict:
-    """Automate building and maintaining ## Related sections across notes."""
+    """Automate building and maintaining ## Related sections across notes. mode='extended' links the most recent chat note to the full vault with MOC-aware suppression (like full, but single note only)."""
     undo_file = VAULT_PATH / ".relink-undo.json"
     excluded = [f.replace("\\", "/").rstrip("/") for f in (exclude_folders or [])]
 
@@ -1351,6 +1351,80 @@ def obsidian_relink(
         undo_file.write_text(json.dumps(stack[:5], indent=2), encoding="utf-8")
         status = _apply_relink(target, entries)
         return {"mode": "normal", "note": target_str, "status": status, "links_considered": len(entries)}
+
+    if mode == "extended":
+        if not chats_path.is_dir():
+            raise ToolError(f"Chats folder not found: {CHATS_FOLDER}")
+        notes = [
+            f for f in chats_path.rglob("*.md")
+            if not any(part.startswith(".") for part in f.relative_to(VAULT_PATH).parts)
+        ]
+        if not notes:
+            return {"mode": "extended", "note": None, "status": "no_notes_found"}
+        target = max(notes, key=lambda f: f.stat().st_mtime)
+        target_str = str(target.relative_to(VAULT_PATH))
+
+        # Skip if the target itself is a MOC note
+        moc_map = _build_moc_map()
+        moc_note_paths = set(moc_map.values())
+        if target in moc_note_paths:
+            return {"mode": "extended", "note": target_str, "status": "skipped_moc"}
+
+        # Pre-load MOC wikilinks for intra-group suppression
+        moc_wikilinks: dict[str, set[str]] = {}
+        for folder_str, moc_path in moc_map.items():
+            try:
+                moc_text = moc_path.read_text(encoding="utf-8")
+                moc_wikilinks[folder_str] = set(_parse_wikilinks(moc_text))
+            except (OSError, UnicodeDecodeError):
+                moc_wikilinks[folder_str] = set()
+
+        heuristic_min = FIND_RELATED_MIN_SCORE if smart else min_score
+        result = _find_related_core(target_str, top_k=20 if smart else 10, min_score=heuristic_min)
+        related = []
+        for r in result["related"]:
+            if _is_excluded(r[K_PATH]):
+                continue
+            if not _passes_tag_filter(r["shared_tags"], target.stem, Path(r[K_PATH]).stem):
+                continue
+            candidate_path = VAULT_PATH / r[K_PATH]
+            # MOC intra-group suppression
+            if candidate_path.parent == target.parent:
+                folder_str = str(target.parent)
+                if folder_str in moc_map:
+                    moc_links = moc_wikilinks.get(folder_str, set())
+                    if target.stem in moc_links and candidate_path.stem in moc_links:
+                        continue
+            related.append(r)
+
+        if smart:
+            return {
+                "mode": "extended",
+                "smart": True,
+                "status": "review_pending",
+                "target": target_str,
+                "target_content": _read_full_content(target),
+                "candidates": [
+                    {**r, "content": _read_full_content(VAULT_PATH / r[K_PATH])}
+                    for r in related
+                ],
+                "instruction": (
+                    "Review the target note and each candidate's full content. "
+                    "Select only candidates that are GENUINELY related. "
+                    "Then call obsidian_patch_section with path=target, match='Related', match_type='heading' "
+                    "and content as a bullet list of [[wikilinks]] for verified candidates."
+                ),
+            }
+
+        entries = [_format_related_entry(r["title"], r["shared_tags"]) for r in related]
+        if not entries:
+            return {"mode": "extended", "note": target_str, "status": "no_matches"}
+        stack = json.loads(undo_file.read_text(encoding="utf-8")) if undo_file.exists() else []
+        stack.insert(0, {"timestamp": datetime.now().isoformat(), "mode": "extended",
+                         "entries": [_capture_related_state(target)]})
+        undo_file.write_text(json.dumps(stack[:5], indent=2), encoding="utf-8")
+        status = _apply_relink(target, entries)
+        return {"mode": "extended", "note": target_str, "status": status, "links_considered": len(entries)}
 
     # mode == "full"
     if smart:
