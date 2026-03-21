@@ -740,9 +740,9 @@ def _save_chat_core(
     tags = tags or []
     if custom_date:
         try:
-            today = date.fromisoformat(custom_date)
+            today = datetime.strptime(custom_date, "%Y-%d-%m").date()
         except ValueError:
-            raise ToolError(f"custom_date must be YYYY-MM-DD, got: {custom_date!r}")
+            raise ToolError(f"custom_date must be YYYY-DD-MM, got: {custom_date!r}")
     else:
         today = date.today()
     target_folder = folder or CHATS_FOLDER
@@ -802,7 +802,7 @@ def obsidian_save_chat(
     l1: str = "",
     custom_date: str | None = None,
 ) -> dict:
-    """Save a Claude conversation. Always provide l0 (≤25-word one-sentence summary) and l1 (2-3 sentence ~80-word overview) — written to frontmatter for tiered retrieval. custom_date: YYYY-MM-DD to override today's date."""
+    """Save a Claude conversation. Always provide l0 (≤25-word one-sentence summary) and l1 (2-3 sentence ~80-word overview) — written to frontmatter for tiered retrieval. custom_date: YYYY-DD-MM to override today's date."""
     return _save_chat_core(title, summary, content, tags, project, folder, l0, l1, custom_date)
 
 
@@ -1433,7 +1433,7 @@ def obsidian_help(topic: str = "") -> dict:
                 "tips": [
                     "write_note: full create/overwrite. Always provide l0+l1 for meaningful notes — they go to frontmatter for tiered retrieval.",
                     "append_to_note: add content to end of a note. Use before_section='## Related' to insert BEFORE the Related section instead of after it (avoids breaking link structure).",
-                    "save_chat: saves a Claude conversation. ALWAYS provide l0 (<=25-word summary) and l1 (2-3 sentence overview) as params — auto-generation is unreliable. Use custom_date='YYYY-MM-DD' for saving old chats. Response includes warn key if l0/l1 were missing.",
+                    "save_chat: saves a Claude conversation. ALWAYS provide l0 (<=25-word summary) and l1 (2-3 sentence overview) as params — auto-generation is unreliable. Use custom_date='YYYY-DD-MM' for saving old chats. Response includes warn key if l0/l1 were missing.",
                     "patch_frontmatter: surgical YAML field updates without touching the note body — use for adding tags, updating project, setting custom fields.",
                     "patch_section: surgical body edits. match_type='heading' replaces a section under a heading; match_type='text' finds and replaces a string; match_type='section' deletes an entire section. Preferred over write_note for partial edits.",
                 ],

@@ -559,7 +559,7 @@ def test_savechat_custom_date():
                 title="Old Chat",
                 summary="a summary",
                 content="some content",
-                custom_date="2025-06-15",
+                custom_date="2025-15-06",
             )
             assert not result["appended"], result
             # filename uses YYYY-DD-MM format
@@ -601,7 +601,7 @@ def test_savechat_batch_single():
                 "title": "Batch Chat",
                 "summary": "batch summary",
                 "content": "batch content",
-                "custom_date": "2024-03-10",
+                "custom_date": "2024-10-03",
             }])
             assert result["success_count"] == 1, result
             r = result["results"][0]
@@ -622,8 +622,8 @@ def test_savechat_batch_two_dates():
     try:
         with temp_vault() as vault:
             result = server.obsidian_batch(operations=[
-                {"op": "save_chat", "title": "Chat A", "summary": "s", "content": "c", "custom_date": "2023-01-15"},
-                {"op": "save_chat", "title": "Chat B", "summary": "s", "content": "c", "custom_date": "2022-11-30"},
+                {"op": "save_chat", "title": "Chat A", "summary": "s", "content": "c", "custom_date": "2023-15-01"},
+                {"op": "save_chat", "title": "Chat B", "summary": "s", "content": "c", "custom_date": "2022-30-11"},
             ])
             assert result["success_count"] == 2, result
             paths = [r["p"] for r in result["results"]]
