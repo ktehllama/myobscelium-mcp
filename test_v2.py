@@ -652,12 +652,49 @@ def test_savechat_batch_missing_required():
             record("T-SAVECHAT-05: batch save_chat missing required key raises ToolError", False, str(e))
 
 
+def test_savechat_warn_when_no_l0_l1():
+    orig = server._generate_summary
+    server._generate_summary = lambda c: ("", "")
+    try:
+        with temp_vault():
+            result = server.obsidian_save_chat(title="No Summaries", summary="s", content="c")
+            assert "warn" in result, f"expected warn key in result: {result}"
+            assert "l0/l1 not written" in result["warn"], result["warn"]
+            record("T-SAVECHAT-06: result has warn key when l0/l1 empty", True)
+    except Exception as e:
+        record("T-SAVECHAT-06: result has warn key when l0/l1 empty", False, str(e))
+    finally:
+        server._generate_summary = orig
+
+
+def test_savechat_no_warn_when_l0_l1_provided():
+    orig = server._generate_summary
+    server._generate_summary = lambda c: ("", "")
+    try:
+        with temp_vault() as vault:
+            result = server.obsidian_save_chat(
+                title="With Summaries", summary="s", content="c",
+                l0="One sentence summary here.", l1="Two or three sentences. About the topic. Key points.",
+            )
+            assert "warn" not in result, f"unexpected warn in result: {result}"
+            text = (vault / result["p"]).read_text(encoding="utf-8")
+            assert "l0:" in text, f"l0 not in frontmatter:\n{text[:300]}"
+            assert "l1:" in text, f"l1 not in frontmatter:\n{text[:300]}"
+            record("T-SAVECHAT-07: no warn when l0/l1 explicit, frontmatter has l0/l1", True)
+    except Exception as e:
+        record("T-SAVECHAT-07: no warn when l0/l1 explicit, frontmatter has l0/l1", False, str(e))
+    finally:
+        server._generate_summary = orig
+
+
 SAVECHAT_TESTS = [
     ("T-SAVECHAT-01: custom_date sets filename and frontmatter date", test_savechat_custom_date),
     ("T-SAVECHAT-02: invalid custom_date raises ToolError", test_savechat_invalid_custom_date),
     ("T-SAVECHAT-03: batch save_chat creates note with custom_date", test_savechat_batch_single),
     ("T-SAVECHAT-04: batch with two save_chat ops, different dates", test_savechat_batch_two_dates),
     ("T-SAVECHAT-05: batch save_chat missing required key raises ToolError", test_savechat_batch_missing_required),
+    ("T-SAVECHAT-06: result has warn key when l0/l1 empty", test_savechat_warn_when_no_l0_l1),
+    ("T-SAVECHAT-07: no warn when l0/l1 explicit, frontmatter has l0/l1", test_savechat_no_warn_when_l0_l1_provided),
 ]
 
 
