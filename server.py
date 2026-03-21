@@ -1407,5 +1407,109 @@ def obsidian_relink(
     }
 
 
+@mcp.tool()
+def obsidian_help(topic: str = "") -> dict:
+    """Return usage guide for Myobscelium tools. topic: tool name or category to filter (empty = full guide)."""
+    guide = {
+        "overview": (
+            "Myobscelium — 19 tools organized into 6 categories. "
+            "All paths are relative to the vault root. "
+            "Responses use abbreviated keys: p=path, c=content, m=modified, lc=line_count, s=score, st=shared_tags, l0=l0_summary."
+        ),
+        "categories": {
+            "READ": {
+                "tools": ["obsidian_vault_overview", "obsidian_read_note", "obsidian_read_frontmatter", "obsidian_list_folder"],
+                "when": "Exploring structure or loading note content.",
+                "tips": [
+                    "vault_overview: start of a session to orient — use mode='compact' (default) to save tokens, mode='tree' for visual layout.",
+                    "read_note: use summary_only=True to get only l0+l1+line_count without loading the body — good for deciding whether to load full.",
+                    "read_frontmatter: cheapest way to check tags, project, l0/l1 without any body content.",
+                    "list_folder: use names_only=True for a flat path list when you just need to know what exists; include_preview=True when you want a snippet of each note.",
+                ],
+            },
+            "WRITE": {
+                "tools": ["obsidian_write_note", "obsidian_append_to_note", "obsidian_save_chat", "obsidian_patch_frontmatter", "obsidian_patch_section"],
+                "when": "Creating or modifying notes.",
+                "tips": [
+                    "write_note: full create/overwrite. Always provide l0+l1 for meaningful notes — they go to frontmatter for tiered retrieval.",
+                    "append_to_note: add content to end of a note. Use before_section='## Related' to insert BEFORE the Related section instead of after it (avoids breaking link structure).",
+                    "save_chat: saves a Claude conversation. ALWAYS provide l0 (<=25-word summary) and l1 (2-3 sentence overview) as params — auto-generation is unreliable. Use custom_date='YYYY-MM-DD' for saving old chats. Response includes warn key if l0/l1 were missing.",
+                    "patch_frontmatter: surgical YAML field updates without touching the note body — use for adding tags, updating project, setting custom fields.",
+                    "patch_section: surgical body edits. match_type='heading' replaces a section under a heading; match_type='text' finds and replaces a string; match_type='section' deletes an entire section. Preferred over write_note for partial edits.",
+                ],
+            },
+            "ORGANIZE": {
+                "tools": ["obsidian_move_note", "obsidian_delete_note", "obsidian_move_folder", "obsidian_batch"],
+                "when": "Restructuring the vault.",
+                "tips": [
+                    "move_note: also works as rename — same folder, different filename.",
+                    "delete_note: requires confirm=True. Irreversible.",
+                    "move_folder: moves entire subtree. Use with care — wikilinks to moved notes will break.",
+                    "batch: preferred for 2+ operations in one call. Supports ops: write, append, move, delete, patch_section, find_related, save_chat. Each op is a dict with 'op' key plus op-specific fields. delete requires confirm=True on the batch or the individual op.",
+                ],
+            },
+            "SEARCH": {
+                "tools": ["obsidian_search", "obsidian_find_related"],
+                "when": "Finding notes by content or similarity.",
+                "tips": [
+                    "search: text/regex search across the vault. Use tier='l0' or tier='l1' to return only frontmatter summaries for matches — much cheaper than loading full content. content_max_chars defaults to 500.",
+                    "find_related: IDF scoring across tags + title words + body words. Returns abbreviated keys (p, s, st, l0). Use to discover connections you didn't know existed. Same-folder notes are dampened by 0.4x to reduce project-folder noise.",
+                ],
+            },
+            "GRAPH": {
+                "tools": ["obsidian_graph_walk", "obsidian_relink", "obsidian_backfill_summaries"],
+                "when": "Working with the vault's link graph.",
+                "tips": [
+                    "graph_walk: traverses EXISTING [[wikilinks]] outward from a note. Different from find_related — graph_walk follows links you already made, find_related discovers new connections via scoring. Use direction='both' to see what links to+from a note; direction='out' for what a note points to; direction='in' for backlinks. include_l0=True adds one-line summaries to each discovered node. Great for building context: graph_walk from the most recent note → degree-1 = primary context, degree-2 = secondary.",
+                    "relink: auto-populates ## Related sections with scored links. mode='normal' relinks the most recent chat note only; mode='full' scans the entire vault (slow, use sparingly); mode='undo' reverts the last relink. smart=True returns candidates for human review without writing. MOC-aware: notes in a folder with a Map of Content won't get redundant intra-group links.",
+                    "backfill_summaries: generates l0/l1 for notes that are missing them. Calls Claude via claude_code_sdk — may fail silently if SDK can't nest sessions. Use limit param to avoid runaway calls. Errors appear in the errors[] list.",
+                ],
+            },
+        },
+        "tier_system": {
+            "l0": "1-sentence frontmatter field (~25 words). Used by find_related for cheap scanning. Read via read_frontmatter or summary_only=True.",
+            "l1": "2-3 sentence frontmatter field (~80 words). The human-readable orientation layer. Read via read_frontmatter or summary_only=True.",
+            "l2": "The full note body. Only loaded when you actually call read_note without summary_only. Dense machine notation is preferred over prose for chat saves — higher keyword density = better retrieval scores.",
+            "when_to_use_each": "Start with l0 (scan many notes cheaply) → escalate to l1 (understand the note) → escalate to l2 (full content) only for notes that are definitely relevant.",
+        },
+        "common_workflows": {
+            "start_of_session": "vault_overview → graph_walk from most recent relevant note (depth=2, include_l0=True) → read_note(summary_only=True) on interesting neighbors → read_note full on the 1-2 most relevant",
+            "save_a_chat": "obsidian_save_chat with title, summary, content (dense notation), tags, project, l0, l1. Use custom_date for old chats.",
+            "save_multiple_old_chats": "obsidian_batch with list of save_chat ops, each with custom_date set",
+            "rename_a_note": "obsidian_move_note(from_path='Folder/OldName.md', to_path='Folder/NewName.md')",
+            "add_content_before_related": "obsidian_append_to_note with before_section='## Related'",
+            "surgical_edit": "obsidian_patch_section — never use write_note(overwrite=True) just to add a section",
+            "find_context_for_a_topic": "obsidian_find_related on a relevant note → obsidian_graph_walk on top results",
+            "update_tags_or_metadata": "obsidian_patch_frontmatter — leaves body untouched",
+        },
+        "gotchas": [
+            "save_chat auto-prepends date to filename — do NOT include date in the title param or you get a doubled prefix like '2026-21-03 2026-21-03 Title.md'.",
+            "append_to_note without before_section goes to absolute EOF — lands after ## Related and breaks link structure. Use before_section='## Related' when the note has one.",
+            "write_note(overwrite=True) rewrites the entire file — use patch_section for partial edits.",
+            "move_folder does NOT update [[wikilinks]] pointing to moved notes — links will break.",
+            "delete_note is irreversible — relink undo only covers ## Related sections, not deleted files.",
+            "backfill_summaries may silently fail if claude_code_sdk can't nest a session inside the MCP process — check errors[] in the response.",
+            "graph_walk builds the reverse index (backlinks) on every call with direction='in' or 'both' — slow on large vaults. Use direction='out' when backlinks aren't needed.",
+            "relink mode='full' is slow and writes to every note — run sparingly, use undo if results are wrong.",
+        ],
+    }
+
+    if topic:
+        t = topic.lower().strip()
+        # Check tool name match
+        for cat, data in guide["categories"].items():
+            tool_names = [tool.lower() for tool in data["tools"]]
+            tool_stems = [tool.replace("obsidian_", "") for tool in tool_names]
+            if t in tool_names or t in tool_stems or t == cat.lower():
+                return {"topic": topic, "category": cat, **data, "gotchas": [g for g in guide["gotchas"] if t.replace("obsidian_", "") in g.lower()]}
+        # Check free-text sections
+        for key in ("tier_system", "common_workflows", "gotchas", "overview"):
+            if t in key:
+                return {"topic": key, "content": guide[key]}
+        return {"topic": topic, "note": "No specific entry found. Returning full guide.", **guide}
+
+    return guide
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
