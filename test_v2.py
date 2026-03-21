@@ -559,15 +559,13 @@ def test_savechat_custom_date():
                 title="Old Chat",
                 summary="a summary",
                 content="some content",
-                custom_date="2025-15-06",
+                custom_date="2025-06-15",
             )
             assert not result["appended"], result
-            # filename uses YYYY-DD-MM format
-            assert "2025-15-06" in result["p"], f"expected 2025-15-06 in path, got: {result['p']}"
-            # frontmatter date matches (YAML may quote the value)
+            assert "2025-06-15" in result["p"], f"expected 2025-06-15 in path, got: {result['p']}"
             note_path = vault / result["p"]
             text = note_path.read_text(encoding="utf-8")
-            assert "2025-15-06" in text, f"date not in frontmatter:\n{text[:300]}"
+            assert "2025-06-15" in text, f"date not in frontmatter:\n{text[:300]}"
             record("T-SAVECHAT-01: custom_date sets filename and frontmatter date", True)
     except Exception as e:
         record("T-SAVECHAT-01: custom_date sets filename and frontmatter date", False, str(e))
@@ -601,12 +599,12 @@ def test_savechat_batch_single():
                 "title": "Batch Chat",
                 "summary": "batch summary",
                 "content": "batch content",
-                "custom_date": "2024-10-03",
+                "custom_date": "2024-03-10",
             }])
             assert result["success_count"] == 1, result
             r = result["results"][0]
             assert r["ok"], r
-            assert "2024-10-03" in r["p"], f"expected 2024-10-03 in path, got: {r['p']}"
+            assert "2024-03-10" in r["p"], f"expected 2024-03-10 in path, got: {r['p']}"
             note_path = vault / r["p"]
             assert note_path.exists(), f"note not created at {note_path}"
             record("T-SAVECHAT-03: batch save_chat creates note with custom_date", True)
@@ -622,13 +620,13 @@ def test_savechat_batch_two_dates():
     try:
         with temp_vault() as vault:
             result = server.obsidian_batch(operations=[
-                {"op": "save_chat", "title": "Chat A", "summary": "s", "content": "c", "custom_date": "2023-15-01"},
-                {"op": "save_chat", "title": "Chat B", "summary": "s", "content": "c", "custom_date": "2022-30-11"},
+                {"op": "save_chat", "title": "Chat A", "summary": "s", "content": "c", "custom_date": "2023-01-15"},
+                {"op": "save_chat", "title": "Chat B", "summary": "s", "content": "c", "custom_date": "2022-11-30"},
             ])
             assert result["success_count"] == 2, result
             paths = [r["p"] for r in result["results"]]
-            assert any("2023-15-01" in p for p in paths), f"Chat A date not found in {paths}"
-            assert any("2022-30-11" in p for p in paths), f"Chat B date not found in {paths}"
+            assert any("2023-01-15" in p for p in paths), f"Chat A date not found in {paths}"
+            assert any("2022-11-30" in p for p in paths), f"Chat B date not found in {paths}"
             record("T-SAVECHAT-04: batch with two save_chat ops creates both notes", True)
     except Exception as e:
         record("T-SAVECHAT-04: batch with two save_chat ops creates both notes", False, str(e))
