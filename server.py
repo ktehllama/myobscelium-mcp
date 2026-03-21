@@ -1428,7 +1428,7 @@ def obsidian_relink(
 
     # mode == "full"
     if smart:
-        raise ToolError("smart=True is only supported with mode='normal'")
+        raise ToolError("smart=True is only supported with mode='normal' or mode='extended'")
 
     all_notes = [
         f for f in VAULT_PATH.rglob("*.md")
@@ -1588,7 +1588,7 @@ def obsidian_help(topic: str = "") -> dict:
                 "when": "Working with the vault's link graph.",
                 "tips": [
                     "graph_walk: traverses EXISTING [[wikilinks]] outward from a note. Different from find_related — graph_walk follows links you already made, find_related discovers new connections via scoring. Use direction='both' to see what links to+from a note; direction='out' for what a note points to; direction='in' for backlinks. include_l0=True adds one-line summaries to each discovered node. Great for building context: graph_walk from the most recent note → degree-1 = primary context, degree-2 = secondary.",
-                    "relink: auto-populates ## Related sections with scored links. mode='normal' relinks the most recent chat note only; mode='full' scans the entire vault (slow, use sparingly); mode='undo' reverts the last relink. smart=True returns candidates for human review without writing. MOC-aware: notes in a folder with a Map of Content won't get redundant intra-group links.",
+                    "relink: auto-populates ## Related sections with scored links. mode='normal' relinks the most recent chat note (Claude/Chats only); mode='extended' relinks the most recent chat note against the full vault with MOC-aware suppression — use this after saving a chat to connect it to your broader notes; mode='full' scans and relinks every note in the vault (slow, use sparingly); mode='undo' reverts the last relink (up to 5 deep). smart=True returns candidates for human review without writing. MOC-aware: notes in a folder with a Map of Content won't get redundant intra-group links.",
                     "backfill_summaries: generates l0/l1 for notes that are missing them. Calls Claude via claude_code_sdk — may fail silently if SDK can't nest sessions. Use limit param to avoid runaway calls. Errors appear in the errors[] list.",
                 ],
             },
