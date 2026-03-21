@@ -601,7 +601,7 @@ def obsidian_write_note(
     l0: str = "",
     l1: str = "",
 ) -> dict:
-    """Create or overwrite a vault note, optionally with l0/l1 summaries."""
+    """Create or overwrite a vault note. Provide l0 (≤25-word summary) and l1 (2-3 sentence overview) for notes with meaningful content — written to frontmatter for tiered retrieval."""
     p = vault_path(path)
     # Auto-generate summaries if content has frontmatter, body >200 chars, and l0 not provided
     if content.startswith("---\n") and not l0:
@@ -756,6 +756,7 @@ def _save_chat_core(
             l0 = gen_l0
         if not l1:
             l1 = gen_l1
+    missing_summaries = not l0 and not l1
 
     all_tags = ["claude", "chat"] + tags
     fm_data: dict = {
@@ -779,11 +780,14 @@ def _save_chat_core(
         section = f"\n\n## {now} — {title}\n\n{content}"
         existing = p.read_text(encoding="utf-8")
         p.write_text(existing + section, encoding="utf-8")
-        return {"p": str(p.relative_to(VAULT_PATH)), "appended": True}
+        result: dict = {"p": str(p.relative_to(VAULT_PATH)), "appended": True}
     else:
         full = f"{frontmatter}\n\n# {title}\n\n{content}"
         p.write_text(full, encoding="utf-8")
-        return {"p": str(p.relative_to(VAULT_PATH)), "appended": False}
+        result = {"p": str(p.relative_to(VAULT_PATH)), "appended": False}
+    if missing_summaries:
+        result["warn"] = "l0/l1 not written — provide them explicitly for tiered retrieval"
+    return result
 
 
 @mcp.tool()
@@ -798,7 +802,7 @@ def obsidian_save_chat(
     l1: str = "",
     custom_date: str | None = None,
 ) -> dict:
-    """Save a Claude conversation. custom_date: YYYY-MM-DD to override today's date (for saving old chats)."""
+    """Save a Claude conversation. Always provide l0 (≤25-word one-sentence summary) and l1 (2-3 sentence ~80-word overview) — written to frontmatter for tiered retrieval. custom_date: YYYY-MM-DD to override today's date."""
     return _save_chat_core(title, summary, content, tags, project, folder, l0, l1, custom_date)
 
 
@@ -1124,8 +1128,8 @@ def obsidian_backfill_summaries(
                 continue
             text = md_file.read_text(encoding="utf-8")
             l0, l1 = _generate_summary(text)
-            if not l0 and not l1:
-                skipped += 1
+            if not l0:
+                errors.append(f"{md_file.relative_to(VAULT_PATH)}: summary generation returned empty")
                 continue
             updates: dict = {"l1_generated": today.isoformat()}
             if l0:
