@@ -1273,7 +1273,11 @@ def obsidian_relink(
     if mode == "undo":
         if not undo_file.exists():
             return {"mode": "undo", "status": "no_backup_found"}
-        backup = json.loads(undo_file.read_text(encoding="utf-8"))
+        stack = json.loads(undo_file.read_text(encoding="utf-8"))
+        if not stack:
+            undo_file.unlink(missing_ok=True)
+            return {"mode": "undo", "status": "no_backup_found"}
+        backup = stack.pop(0)
         restored = 0
         skipped = 0
         for entry in backup["entries"]:
@@ -1284,15 +1288,19 @@ def obsidian_relink(
                     continue
                 if entry["had_section"]:
                     _patch_section(p, "Related", "heading", entry["section_content"] or "",
-                                   heading_level=2, create_if_missing=True)
+                                   heading_level=None, create_if_missing=True)
                 else:
-                    _remove_section(p, "Related", heading_level=2)
+                    _remove_section(p, "Related", heading_level=None)
                 restored += 1
             except Exception:
                 skipped += 1
-        undo_file.unlink(missing_ok=True)
+        if stack:
+            undo_file.write_text(json.dumps(stack, indent=2), encoding="utf-8")
+        else:
+            undo_file.unlink(missing_ok=True)
         return {"mode": "undo", "restored": restored, "skipped": skipped,
-                "from_timestamp": backup.get("timestamp")}
+                "from_timestamp": backup.get("timestamp"),
+                "undos_remaining": len(stack)}
 
     chats_path = vault_path(CHATS_FOLDER)
 
@@ -1335,9 +1343,10 @@ def obsidian_relink(
         entries = [_format_related_entry(r["title"], r["shared_tags"]) for r in related]
         if not entries:
             return {"mode": "normal", "note": target_str, "status": "no_matches"}
-        backup = {"timestamp": datetime.now().isoformat(), "mode": "normal",
-                  "entries": [_capture_related_state(target)]}
-        undo_file.write_text(json.dumps(backup, indent=2), encoding="utf-8")
+        stack = json.loads(undo_file.read_text(encoding="utf-8")) if undo_file.exists() else []
+        stack.insert(0, {"timestamp": datetime.now().isoformat(), "mode": "normal",
+                         "entries": [_capture_related_state(target)]})
+        undo_file.write_text(json.dumps(stack[:5], indent=2), encoding="utf-8")
         status = _apply_relink(target, entries)
         return {"mode": "normal", "note": target_str, "status": status, "links_considered": len(entries)}
 
@@ -1421,10 +1430,9 @@ def obsidian_relink(
     forward = deduped
 
     backup_entries = [_capture_related_state(vault_path(ns)) for ns in forward]
-    undo_file.write_text(
-        json.dumps({"timestamp": datetime.now().isoformat(), "mode": "full", "entries": backup_entries}, indent=2),
-        encoding="utf-8",
-    )
+    stack = json.loads(undo_file.read_text(encoding="utf-8")) if undo_file.exists() else []
+    stack.insert(0, {"timestamp": datetime.now().isoformat(), "mode": "full", "entries": backup_entries})
+    undo_file.write_text(json.dumps(stack[:5], indent=2), encoding="utf-8")
 
     updated = 0
     no_change = 0
