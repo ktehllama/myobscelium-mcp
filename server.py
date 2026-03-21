@@ -309,6 +309,27 @@ def _read_existing_related(text: str) -> tuple[list[str], set[str]]:
 def _apply_relink(note_path: Path, new_entries: list[str], vault_stems: set[str] | None = None) -> str:
     """Merge new_entries into the note's ## Related section. Returns 'updated' | 'no_change'."""
     text = note_path.read_text(encoding="utf-8")
+
+    # Collapse any duplicate Related sections — keep only the first occurrence's content,
+    # remove all subsequent ones before patching to prevent accumulation.
+    related_heading_re = re.compile(r'^(#{1,6})\s+Related\s*$', re.IGNORECASE)
+    any_heading_re = re.compile(r'^#{1,6}\s+')
+    raw_lines = text.splitlines(keepends=True)
+    related_indices = [i for i, l in enumerate(raw_lines) if related_heading_re.match(l.rstrip())]
+    if len(related_indices) > 1:
+        # Remove all but the first: walk backwards so indices stay valid
+        for start in reversed(related_indices[1:]):
+            lvl = len(raw_lines[start]) - len(raw_lines[start].lstrip('#'))
+            end = len(raw_lines)
+            for j in range(start + 1, len(raw_lines)):
+                m = any_heading_re.match(raw_lines[j])
+                if m and (len(raw_lines[j]) - len(raw_lines[j].lstrip('#'))) <= lvl:
+                    end = j
+                    break
+            del raw_lines[start:end]
+        text = "".join(raw_lines)
+        note_path.write_text(text, encoding="utf-8")
+
     existing_lines, _ = _read_existing_related(text)
 
     if vault_stems is None:
@@ -340,7 +361,7 @@ def _apply_relink(note_path: Path, new_entries: list[str], vault_stems: set[str]
         return "no_change"
 
     merged = "\n".join(valid_existing + to_add)
-    _patch_section(note_path, "Related", "heading", merged, heading_level=2, create_if_missing=True)
+    _patch_section(note_path, "Related", "heading", merged, heading_level=None, create_if_missing=True)
     return "updated"
 
 
