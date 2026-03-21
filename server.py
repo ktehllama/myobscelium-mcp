@@ -1381,6 +1381,24 @@ def obsidian_relink(
         else:
             no_matches += 1
 
+    # Deduplicate: for each pair (A, B), keep only the first direction encountered.
+    # Prevents symmetric scoring from creating A→B and B→A in the same pass,
+    # which would artificially inflate node degree (fat nodes).
+    seen_pairs: set[frozenset] = set()
+    deduped: dict[str, list[tuple[str, list[str]]]] = {}
+    for note_str, entries in forward.items():
+        kept = []
+        for title, tags in entries:
+            pair: frozenset = frozenset({Path(note_str).stem, title})
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                kept.append((title, tags))
+        if kept:
+            deduped[note_str] = kept
+        else:
+            no_matches += 1
+    forward = deduped
+
     backup_entries = [_capture_related_state(vault_path(ns)) for ns in forward]
     undo_file.write_text(
         json.dumps({"timestamp": datetime.now().isoformat(), "mode": "full", "entries": backup_entries}, indent=2),
