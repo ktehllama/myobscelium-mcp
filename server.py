@@ -208,6 +208,8 @@ def _patch_section(p: Path, match: str, match_type: str, content: str,
         return "ok" if removed else "not_found"
 
     # match_type == "heading"
+    # Strip any leading # markers the caller may have included (e.g. "## Related" → "Related")
+    clean_match = re.sub(r'^#+\s*', '', match).strip()
     heading_re = re.compile(r'^(#{1,6})\s+(.*?)\s*$')
     lines = text.splitlines(keepends=True)
     found_idx = None
@@ -217,7 +219,7 @@ def _patch_section(p: Path, match: str, match_type: str, content: str,
         if m:
             lvl = len(m.group(1))
             title = m.group(2)
-            if title.lower() == match.lower():
+            if title.lower() == clean_match.lower():
                 if heading_level is None or lvl == heading_level:
                     found_idx = i
                     found_level = lvl
@@ -235,7 +237,7 @@ def _patch_section(p: Path, match: str, match_type: str, content: str,
         else:
             sep = "\n\n"
         body = content if content.endswith("\n") else content + "\n"
-        p.write_text(text + sep + f"{marker} {match}\n{body}", encoding="utf-8")
+        p.write_text(text + sep + f"{marker} {clean_match}\n{body}", encoding="utf-8")
         return "created"
 
     end_idx = len(lines)
