@@ -749,6 +749,80 @@ TITLE_IDF_TESTS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# T-EXTENDED: extended relink mode
+# ---------------------------------------------------------------------------
+
+def test_extended_links_to_external_note():
+    """Extended mode links most recent chat note to a non-Chats vault note sharing tags."""
+    import time
+    with temp_vault("Chats") as vault:
+        chats = vault / "Chats"
+        chats.mkdir()
+        write_note(vault, "Chats/2026-03-21 Chat Note.md",
+                   fm(["python", "mcp"]) + "Chat about python mcp server.\n")
+        # Touch to ensure it's most recent
+        time.sleep(0.01)
+        chat_path = vault / "Chats/2026-03-21 Chat Note.md"
+        chat_path.touch()
+
+        # External note outside Chats with matching tags
+        write_note(vault, "Projects/My MCP Project.md",
+                   fm(["python", "mcp"]) + "Python MCP project notes.\n")
+        # Unrelated note
+        write_note(vault, "Journal/random.md",
+                   fm(["random"]) + "Unrelated content.\n")
+
+        server.VAULT_PATH = vault
+        server.CHATS_FOLDER = "Chats"
+        result = server.obsidian_relink(mode="extended", min_score=0.05)
+        assert result["mode"] == "extended"
+        assert result["status"] in ("updated", "no_matches", "no_change")
+        # Check that the chat note now links to the MCP project
+        chat_text = chat_path.read_text(encoding="utf-8")
+        assert "[[My MCP Project]]" in chat_text, (
+            f"Extended mode should have linked to external note 'My MCP Project' — got:\n{chat_text}"
+        )
+        record("T-EXTENDED-01: extended mode links most recent chat to vault-wide notes", True)
+
+
+def test_extended_moc_suppression():
+    """Extended mode skips intra-group links when both notes are covered by the same MOC."""
+    import time
+    with temp_vault("Chats") as vault:
+        chats = vault / "Chats"
+        chats.mkdir()
+        # Create a MOC in the Chats folder
+        moc_content = (
+            "---\ntags:\n  - moc\ntype: moc\n---\n"
+            "# Chats MOC\n"
+            "* [[2026-03-21 Chat Note]]\n"
+            "* [[2026-03-20 Older Chat]]\n"
+        )
+        write_note(vault, "Chats/Chats MOC.md", moc_content)
+        # Two notes both covered by the MOC, with matching tags
+        write_note(vault, "Chats/2026-03-20 Older Chat.md",
+                   fm(["python", "mcp"]) + "Older chat about python mcp.\n")
+        time.sleep(0.01)
+        write_note(vault, "Chats/2026-03-21 Chat Note.md",
+                   fm(["python", "mcp"]) + "Newer chat about python mcp.\n")
+
+        server.VAULT_PATH = vault
+        server.CHATS_FOLDER = "Chats"
+        result = server.obsidian_relink(mode="extended", min_score=0.05)
+        chat_text = (vault / "Chats/2026-03-21 Chat Note.md").read_text(encoding="utf-8")
+        assert "[[2026-03-20 Older Chat]]" not in chat_text, (
+            f"Extended mode should suppress intra-MOC link — got:\n{chat_text}"
+        )
+        record("T-EXTENDED-02: extended mode suppresses intra-group MOC links", True)
+
+
+EXTENDED_TESTS = [
+    ("T-EXTENDED-01: extended mode links most recent chat to vault-wide notes", test_extended_links_to_external_note),
+    ("T-EXTENDED-02: extended mode suppresses intra-group MOC links", test_extended_moc_suppression),
+]
+
+
 if __name__ == "__main__":
     print()
     print("=" * 68)
@@ -788,6 +862,11 @@ if __name__ == "__main__":
     print("")
     print("--- T-TITLE-IDF: IDF-based title word scoring ---")
     for name, fn in TITLE_IDF_TESTS:
+        run_test(name, fn)
+
+    print("")
+    print("--- T-EXTENDED: extended relink mode ---")
+    for name, fn in EXTENDED_TESTS:
         run_test(name, fn)
 
     passing = sum(1 for _, ok, _ in RESULTS if ok)
