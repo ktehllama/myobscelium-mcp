@@ -144,6 +144,7 @@ def _find_related_core(path_str: str, top_k: int = 10, folder: str = "", min_sco
 
     all_notes = []
     tag_freq: dict[str, int] = {}
+    title_word_freq: dict[str, int] = {}
     for md_file in root.rglob("*.md"):
         if any(part.startswith(".") for part in md_file.relative_to(VAULT_PATH).parts):
             continue
@@ -153,10 +154,12 @@ def _find_related_core(path_str: str, top_k: int = 10, folder: str = "", min_sco
         all_notes.append((md_file, tags, l0))
         for t in tags:
             tag_freq[t] = tag_freq.get(t, 0) + 1
+        for w in set(re.findall(r"[a-z]{3,}", md_file.stem.lower())) - CONTENT_STOP:
+            title_word_freq[w] = title_word_freq.get(w, 0) + 1
 
     target_fm = _parse_frontmatter(target) or {}
     target_tags = _norm_tags(target_fm.get("tags", []))
-    target_words = set(re.findall(r"[a-z]+", target.stem.lower())) - STOP_WORDS
+    target_words = set(re.findall(r"[a-z]{3,}", target.stem.lower())) - CONTENT_STOP
     target_body_words = _body_words(target)
 
     results = []
@@ -165,8 +168,9 @@ def _find_related_core(path_str: str, top_k: int = 10, folder: str = "", min_sco
             continue
         shared = (target_tags & note_tags) - GENERIC_TAGS
         tag_score = sum(1.0 / tag_freq[t] for t in shared)
-        note_words = set(re.findall(r"[a-z]+", md_file.stem.lower())) - STOP_WORDS
-        title_score = len(target_words & note_words) * TITLE_WORD_WEIGHT
+        note_words = set(re.findall(r"[a-z]{3,}", md_file.stem.lower())) - CONTENT_STOP
+        shared_title = target_words & note_words
+        title_score = sum(1.0 / title_word_freq.get(w, 1) for w in shared_title) * TITLE_WORD_WEIGHT
         content_score = len(target_body_words & _body_words(md_file)) * BODY_WORD_WEIGHT
         score = round(tag_score + title_score + content_score, 2)
         if md_file.parent == target.parent:

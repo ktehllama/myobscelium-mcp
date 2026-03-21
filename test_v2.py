@@ -696,6 +696,59 @@ SAVECHAT_TESTS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# T-TITLE-IDF: IDF-based title word scoring
+# ---------------------------------------------------------------------------
+
+def test_title_idf_common_word_no_link():
+    """Common title word ('template') shared between unrelated notes should not drive a link."""
+    with temp_vault() as vault:
+        # 10 notes all containing 'template' in the title — makes it common (low IDF)
+        for i in range(10):
+            write_note(vault, f"Topic{i}/template guide {i}.md",
+                       fm(["topic" + str(i)]) + f"Body about topic {i}.\n")
+        # The two notes we care about — same word 'template', different topics
+        write_note(vault, "Django/making templates.md",
+                   fm(["django", "web"]) + "Django template rendering guide.\n")
+        write_note(vault, "Jobs/sphera interview template.md",
+                   fm(["interview", "jobs"]) + "Template for sphera job interview prep.\n")
+
+        server.VAULT_PATH = vault
+        result = server._find_related_core("Django/making templates.md", top_k=10, min_score=0.3)
+        related_stems = [Path(r["p"]).stem for r in result["related"]]
+        assert "sphera interview template" not in related_stems, (
+            f"'sphera interview template' should not link to 'making templates' via common word — got {related_stems}"
+        )
+        record("T-TITLE-IDF-01: common title word does not drive link above threshold", True)
+
+
+def test_title_idf_rare_word_does_link():
+    """Rare title word shared between exactly 2 notes should still contribute a meaningful score."""
+    with temp_vault() as vault:
+        # Only 2 notes share the rare word 'myobscelium'
+        write_note(vault, "Projects/myobscelium setup.md",
+                   fm(["mcp"]) + "Setup guide.\n")
+        write_note(vault, "Projects/myobscelium relink.md",
+                   fm(["mcp"]) + "Relink system.\n")
+        # Unrelated note
+        write_note(vault, "Other/random note.md",
+                   fm(["random"]) + "Something else.\n")
+
+        server.VAULT_PATH = vault
+        result = server._find_related_core("Projects/myobscelium setup.md", top_k=10, min_score=0.05)
+        related_stems = [Path(r["p"]).stem for r in result["related"]]
+        assert "myobscelium relink" in related_stems, (
+            f"'myobscelium relink' should link to 'myobscelium setup' via rare shared word — got {related_stems}"
+        )
+        record("T-TITLE-IDF-02: rare title word produces meaningful score and links", True)
+
+
+TITLE_IDF_TESTS = [
+    ("T-TITLE-IDF-01: common title word does not drive link above threshold", test_title_idf_common_word_no_link),
+    ("T-TITLE-IDF-02: rare title word produces meaningful score and links", test_title_idf_rare_word_does_link),
+]
+
+
 if __name__ == "__main__":
     print()
     print("=" * 68)
@@ -730,6 +783,11 @@ if __name__ == "__main__":
     print("")
     print("--- T-SAVECHAT: custom_date + batch save_chat ---")
     for name, fn in SAVECHAT_TESTS:
+        run_test(name, fn)
+
+    print("")
+    print("--- T-TITLE-IDF: IDF-based title word scoring ---")
+    for name, fn in TITLE_IDF_TESTS:
         run_test(name, fn)
 
     passing = sum(1 for _, ok, _ in RESULTS if ok)
