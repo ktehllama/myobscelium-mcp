@@ -326,8 +326,12 @@ def test_bidirectional_relink():
         server.obsidian_relink(mode="full", min_score=0.01)
         a_txt = (v / "Alpha.md").read_text(encoding="utf-8")
         b_txt = (v / "Beta.md").read_text(encoding="utf-8")
-        assert "[[Beta]]" in a_txt, "Alpha should link to Beta"
-        assert "[[Alpha]]" in b_txt, "Beta should link back to Alpha"
+        a_links_b = "[[Beta]]" in a_txt
+        b_links_a = "[[Alpha]]" in b_txt
+        # Exactly one direction should exist — no artificial fat nodes
+        assert a_links_b != b_links_a, (
+            f"Expected exactly one direction: Alpha→Beta={a_links_b}, Beta→Alpha={b_links_a}"
+        )
 
 
 TESTS = [
