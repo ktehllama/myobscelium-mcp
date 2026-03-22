@@ -910,6 +910,63 @@ ORPHAN_TESTS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# T-BLOB: same-folder link cap (session blob prevention)
+# ---------------------------------------------------------------------------
+
+def test_blob_same_folder_capped():
+    """5 notes in same folder sharing tags → each links to at most 1 same-folder note."""
+    with temp_vault("Chats") as vault:
+        # 5 session notes, all sharing the same specific tag
+        for i in range(5):
+            write_note(vault, f"Chats/2026-03-21 Session Note {i}.md",
+                       fm(["arcr", "teams", "mcp"]) + f"Session content {i} about arcr teams mcp.\n")
+
+        server.VAULT_PATH = vault
+        server.CHATS_FOLDER = "Chats"
+        result = server.obsidian_relink(mode="full", min_score=0.05)
+        # Check every processed note has at most 1 same-folder link
+        for md_file in (vault / "Chats").glob("*.md"):
+            text = md_file.read_text(encoding="utf-8")
+            lines, _ = server._read_existing_related(text)
+            # Count same-folder links (all would be in Chats/)
+            chats_links = [l for l in lines if any(
+                f"[[2026-03-21 Session Note {i}]]" in l for i in range(5)
+            )]
+            assert len(chats_links) <= 1, (
+                f"{md_file.name} has {len(chats_links)} same-folder links, expected ≤1: {chats_links}"
+            )
+        record("T-BLOB-01: same-folder links capped at 1 per note", True)
+
+
+def test_blob_cross_folder_not_capped():
+    """Notes in different folders with same tags → cross-folder links not capped."""
+    with temp_vault("Chats") as vault:
+        write_note(vault, "Chats/2026-03-21 Chat.md",
+                   fm(["python", "mcp", "arcr"]) + "Chat about python mcp arcr.\n")
+        # 3 external notes with matching tags — all should link
+        for i in range(3):
+            write_note(vault, f"Projects/Project {i}.md",
+                       fm(["python", "mcp", "arcr"]) + f"Project {i} about python mcp arcr.\n")
+
+        server.VAULT_PATH = vault
+        server.CHATS_FOLDER = "Chats"
+        result = server.obsidian_relink(mode="extended", min_score=0.05)
+        text = (vault / "Chats/2026-03-21 Chat.md").read_text(encoding="utf-8")
+        lines, _ = server._read_existing_related(text)
+        cross_links = [l for l in lines if "Project" in l]
+        assert len(cross_links) >= 2, (
+            f"Cross-folder links should not be capped, got {len(cross_links)}: {lines}"
+        )
+        record("T-BLOB-02: cross-folder links not capped", True)
+
+
+BLOB_TESTS = [
+    ("T-BLOB-01: same-folder links capped at 1 per note", test_blob_same_folder_capped),
+    ("T-BLOB-02: cross-folder links not capped", test_blob_cross_folder_not_capped),
+]
+
+
 if __name__ == "__main__":
     print()
     print("=" * 68)
@@ -959,6 +1016,11 @@ if __name__ == "__main__":
     print("")
     print("--- T-ORPHAN: orphan relink mode ---")
     for name, fn in ORPHAN_TESTS:
+        run_test(name, fn)
+
+    print("")
+    print("--- T-BLOB: same-folder link cap ---")
+    for name, fn in BLOB_TESTS:
         run_test(name, fn)
 
     passing = sum(1 for _, ok, _ in RESULTS if ok)
