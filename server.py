@@ -35,6 +35,7 @@ CONTENT_STOP = STOP_WORDS | {
 # --- Named constants ---
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 SAME_FOLDER_DAMPENING = 0.4
+SAME_FOLDER_MAX_LINKS = 1  # max links to notes in the same folder (prevents session blobs)
 RELINK_MIN_SCORE = 0.3
 FIND_RELATED_MIN_SCORE = 0.05
 TITLE_WORD_WEIGHT = 0.1
@@ -255,6 +256,20 @@ def _patch_section(p: Path, match: str, match_type: str, content: str,
     new_text = "".join(lines[:found_idx]) + heading_line + body + "".join(suffix_lines)
     p.write_text(new_text, encoding="utf-8")
     return "ok"
+
+
+def _cap_same_folder_links(related: list, target_parent: Path, max_links: int = SAME_FOLDER_MAX_LINKS) -> list:
+    """Keep only max_links results from the same folder as target. Cross-folder links unrestricted.
+    Input must be pre-sorted by score descending (as returned by _find_related_core)."""
+    same_count = 0
+    out = []
+    for r in related:
+        if (VAULT_PATH / r[K_PATH]).parent == target_parent:
+            if same_count >= max_links:
+                continue
+            same_count += 1
+        out.append(r)
+    return out
 
 
 def _passes_tag_filter(shared_tags: list[str], target_stem: str, note_stem: str) -> bool:
@@ -1326,6 +1341,7 @@ def obsidian_relink(
             if not _is_excluded(r[K_PATH])
             and _passes_tag_filter(r["shared_tags"], target.stem, Path(r[K_PATH]).stem)
         ]
+        related = _cap_same_folder_links(related, target.parent)
         if smart:
             return {
                 "mode": "normal",
@@ -1400,6 +1416,7 @@ def obsidian_relink(
                     if target.stem in moc_links and candidate_path.stem in moc_links:
                         continue
             related.append(r)
+        related = _cap_same_folder_links(related, target.parent)
 
         if smart:
             return {
@@ -1517,6 +1534,7 @@ def obsidian_relink(
                         if note_file.stem in moc_links and candidate_path.stem in moc_links:
                             continue
                 related.append(r)
+            related = _cap_same_folder_links(related, note_file.parent)
             entries = [_format_related_entry(r["title"], r["shared_tags"]) for r in related]
             if not entries:
                 no_matches += 1
@@ -1591,6 +1609,7 @@ def obsidian_relink(
                     if note_file.stem in moc_links and candidate_path.stem in moc_links:
                         continue
             related.append(r)
+        related = _cap_same_folder_links(related, note_file.parent)
         filtered = [(r["title"], r["shared_tags"]) for r in related]
         if filtered:
             forward[note_str] = filtered
