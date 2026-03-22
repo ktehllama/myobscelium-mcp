@@ -967,6 +967,61 @@ BLOB_TESTS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# T-CROSS: cross-project dampening
+# ---------------------------------------------------------------------------
+
+def _fm_project(tags, project):
+    tag_lines = "\n".join(f"  - {t}" for t in tags)
+    return f"---\ntags:\n{tag_lines}\nproject: {project}\n---\n"
+
+
+def test_cross_project_dampened():
+    """Notes sharing a tag but with different project: fields → score dampened, no link above threshold."""
+    with temp_vault("Chats") as vault:
+        # Two notes, same specific tag, DIFFERENT projects
+        write_note(vault, "Chats/2026-03-21 Myobscelium Chat.md",
+                   _fm_project(["mcp", "python"], "myobscelium") + "MCP server for obsidian.\n")
+        write_note(vault, "Chats/2026-03-20 Meridian Chat.md",
+                   _fm_project(["mcp", "python"], "meridian-sage") + "MCP integration for meridian.\n")
+
+        server.VAULT_PATH = vault
+        result = server._find_related_core("Chats/2026-03-21 Myobscelium Chat.md",
+                                           top_k=10, min_score=0.3)
+        related_stems = [Path(r["p"]).stem for r in result["related"]]
+        assert "2026-03-20 Meridian Chat" not in related_stems, (
+            f"Cross-project note should be dampened below 0.3 threshold — got {related_stems}"
+        )
+        record("T-CROSS-01: cross-project notes dampened below threshold", True)
+
+
+def test_same_project_not_dampened():
+    """Notes sharing a tag with the SAME project: field → link still forms normally."""
+    with temp_vault("Chats") as vault:
+        write_note(vault, "Chats/2026-03-21 Myobscelium Chat A.md",
+                   _fm_project(["mcp", "python", "obsidian"], "myobscelium") + "MCP server tool A.\n")
+        write_note(vault, "Chats/2026-03-20 Myobscelium Chat B.md",
+                   _fm_project(["mcp", "python", "obsidian"], "myobscelium") + "MCP server tool B.\n")
+        # Unrelated note from a different project to ensure vault has multiple notes
+        write_note(vault, "Chats/2026-03-19 Other.md",
+                   _fm_project(["random"], "other-project") + "Unrelated.\n")
+
+        server.VAULT_PATH = vault
+        result = server._find_related_core("Chats/2026-03-21 Myobscelium Chat A.md",
+                                           top_k=10, min_score=0.05)
+        related_stems = [Path(r["p"]).stem for r in result["related"]]
+        assert "2026-03-20 Myobscelium Chat B" in related_stems, (
+            f"Same-project note should still link — got {related_stems}"
+        )
+        record("T-CROSS-02: same-project notes link normally", True)
+
+
+CROSS_TESTS = [
+    ("T-CROSS-01: cross-project notes dampened below threshold", test_cross_project_dampened),
+    ("T-CROSS-02: same-project notes link normally", test_same_project_not_dampened),
+]
+
+
 if __name__ == "__main__":
     print()
     print("=" * 68)
@@ -1021,6 +1076,11 @@ if __name__ == "__main__":
     print("")
     print("--- T-BLOB: same-folder link cap ---")
     for name, fn in BLOB_TESTS:
+        run_test(name, fn)
+
+    print("")
+    print("--- T-CROSS: cross-project dampening ---")
+    for name, fn in CROSS_TESTS:
         run_test(name, fn)
 
     passing = sum(1 for _, ok, _ in RESULTS if ok)

@@ -36,6 +36,7 @@ CONTENT_STOP = STOP_WORDS | {
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 SAME_FOLDER_DAMPENING = 0.4
 SAME_FOLDER_MAX_LINKS = 1  # max links to notes in the same folder (prevents session blobs)
+CROSS_PROJECT_DAMPENING = 0.3  # score multiplier when both notes have different non-empty project fields
 RELINK_MIN_SCORE = 0.3
 FIND_RELATED_MIN_SCORE = 0.05
 TITLE_WORD_WEIGHT = 0.1
@@ -130,6 +131,18 @@ def _body_words(p: Path) -> set[str]:
     return {w for w in re.findall(r"[a-z]{5,}", text[:BODY_WORDS_MAX_CHARS].lower()) if w not in CONTENT_STOP}
 
 
+def _infer_project(note_path: Path, fm: dict) -> str:
+    """Return the project context for a note — frontmatter first, then Projects/<Name>/ folder inference."""
+    p = str(fm.get("project", "") or "").strip().lower()
+    if p:
+        return p
+    parts = note_path.relative_to(VAULT_PATH).parts
+    for i, part in enumerate(parts):
+        if part.lower() == "projects" and i + 1 < len(parts) - 1:
+            return parts[i + 1].lower()
+    return ""
+
+
 def _find_related_core(path_str: str, top_k: int = 10, folder: str = "", min_score: float = FIND_RELATED_MIN_SCORE) -> dict:
     """Core similarity computation (IDF tags + title words + body content). Returns {"source": path_str, "related": [...]}."""
     target = vault_path(path_str)
@@ -152,7 +165,8 @@ def _find_related_core(path_str: str, top_k: int = 10, folder: str = "", min_sco
         fm = _parse_frontmatter(md_file) or {}
         tags = _norm_tags(fm.get("tags", []))
         l0 = str(fm.get("l0", "") or "")
-        all_notes.append((md_file, tags, l0))
+        project = _infer_project(md_file, fm)
+        all_notes.append((md_file, tags, l0, project))
         for t in tags:
             tag_freq[t] = tag_freq.get(t, 0) + 1
         for w in set(re.findall(r"[a-z]{3,}", md_file.stem.lower())) - CONTENT_STOP:
@@ -162,9 +176,10 @@ def _find_related_core(path_str: str, top_k: int = 10, folder: str = "", min_sco
     target_tags = _norm_tags(target_fm.get("tags", []))
     target_words = set(re.findall(r"[a-z]{3,}", target.stem.lower())) - CONTENT_STOP
     target_body_words = _body_words(target)
+    target_project = _infer_project(target, target_fm)
 
     results = []
-    for md_file, note_tags, note_l0 in all_notes:
+    for md_file, note_tags, note_l0, note_project in all_notes:
         if md_file.resolve() == target.resolve():
             continue
         shared = (target_tags & note_tags) - GENERIC_TAGS
@@ -176,6 +191,8 @@ def _find_related_core(path_str: str, top_k: int = 10, folder: str = "", min_sco
         score = round(tag_score + title_score + content_score, 2)
         if md_file.parent == target.parent:
             score = round(score * SAME_FOLDER_DAMPENING, 2)
+        if target_project and note_project and target_project != note_project:
+            score = round(score * CROSS_PROJECT_DAMPENING, 2)
         if score > 0 and score >= min_score:
             rel = str(md_file.relative_to(VAULT_PATH))
             results.append({
