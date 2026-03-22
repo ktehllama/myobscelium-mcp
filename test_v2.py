@@ -823,6 +823,69 @@ EXTENDED_TESTS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# T-ORPHAN: orphan relink mode
+# ---------------------------------------------------------------------------
+
+def test_orphan_relinks_isolated_note():
+    """A chat note with no outgoing links and no backlinks is an orphan and gets relinked."""
+    with temp_vault("Chats") as vault:
+        # Orphan: no outgoing links, nothing links to it
+        write_note(vault, "Chats/2026-03-21 Forgotten Chat.md",
+                   fm(["python", "mcp"]) + "A forgotten chat about python mcp.\n")
+        # Related external note with matching tags
+        write_note(vault, "Projects/MCP Server.md",
+                   fm(["python", "mcp"]) + "MCP server project notes.\n")
+
+        server.VAULT_PATH = vault
+        server.CHATS_FOLDER = "Chats"
+        result = server.obsidian_relink(mode="orphan", min_score=0.05)
+        assert result["mode"] == "orphan"
+        assert result["orphans_found"] == 1
+        chat_text = (vault / "Chats/2026-03-21 Forgotten Chat.md").read_text(encoding="utf-8")
+        assert "[[MCP Server]]" in chat_text, (
+            f"Orphan should have been linked to 'MCP Server' — got:\n{chat_text}"
+        )
+        record("T-ORPHAN-01: orphan mode relinks isolated chat note", True)
+
+
+def test_orphan_skips_linked_notes():
+    """Notes with outgoing links or backlinks are NOT treated as orphans."""
+    with temp_vault("Chats") as vault:
+        # Note with an outgoing link — not an orphan
+        write_note(vault, "Chats/2026-03-20 Linked Chat.md",
+                   fm(["python"]) + "Chat with [[Some Reference]] in it.\n")
+        write_note(vault, "Projects/Some Reference.md",
+                   fm(["python"]) + "Reference note.\n")
+        # Note that has a backlink — not an orphan
+        write_note(vault, "Chats/2026-03-19 Mentioned Chat.md",
+                   fm(["python"]) + "Chat content.\n")
+        write_note(vault, "Projects/Hub.md",
+                   fm(["python"]) + "Hub linking to [[2026-03-19 Mentioned Chat]].\n")
+        # True orphan
+        write_note(vault, "Chats/2026-03-21 Orphan Chat.md",
+                   fm(["python", "mcp"]) + "Truly isolated chat.\n")
+        write_note(vault, "Projects/MCP Ref.md",
+                   fm(["python", "mcp"]) + "MCP reference.\n")
+
+        server.VAULT_PATH = vault
+        server.CHATS_FOLDER = "Chats"
+        result = server.obsidian_relink(mode="orphan", min_score=0.05)
+        assert result["orphans_found"] == 1, (
+            f"Only 1 true orphan expected, got {result['orphans_found']}: {result}"
+        )
+        processed_paths = [p["p"] for p in result["processed"]]
+        assert not any("Linked Chat" in p for p in processed_paths), "Linked Chat should not be processed"
+        assert not any("Mentioned Chat" in p for p in processed_paths), "Mentioned Chat should not be processed"
+        record("T-ORPHAN-02: notes with outgoing links or backlinks are skipped", True)
+
+
+ORPHAN_TESTS = [
+    ("T-ORPHAN-01: orphan mode relinks isolated chat note", test_orphan_relinks_isolated_note),
+    ("T-ORPHAN-02: notes with outgoing links or backlinks are skipped", test_orphan_skips_linked_notes),
+]
+
+
 if __name__ == "__main__":
     print()
     print("=" * 68)
@@ -867,6 +930,11 @@ if __name__ == "__main__":
     print("")
     print("--- T-EXTENDED: extended relink mode ---")
     for name, fn in EXTENDED_TESTS:
+        run_test(name, fn)
+
+    print("")
+    print("--- T-ORPHAN: orphan relink mode ---")
+    for name, fn in ORPHAN_TESTS:
         run_test(name, fn)
 
     passing = sum(1 for _, ok, _ in RESULTS if ok)
