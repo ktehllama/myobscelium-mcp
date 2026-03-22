@@ -880,9 +880,33 @@ def test_orphan_skips_linked_notes():
         record("T-ORPHAN-02: notes with outgoing links or backlinks are skipped", True)
 
 
+def test_orphan_old_undo_format():
+    """Pre-existing .relink-undo.json in old dict format must not crash orphan/normal/extended."""
+    import json
+    with temp_vault("Chats") as vault:
+        # Seed old-format undo file (single dict, not a list)
+        old_fmt = {"timestamp": "2026-01-01T00:00:00", "mode": "normal", "entries": []}
+        (vault / ".relink-undo.json").write_text(json.dumps(old_fmt), encoding="utf-8")
+
+        write_note(vault, "Chats/2026-03-21 Orphan Chat.md",
+                   fm(["python", "mcp"]) + "Isolated chat.\n")
+        write_note(vault, "Projects/MCP Ref.md",
+                   fm(["python", "mcp"]) + "MCP reference.\n")
+
+        server.VAULT_PATH = vault
+        server.CHATS_FOLDER = "Chats"
+        try:
+            result = server.obsidian_relink(mode="orphan", min_score=0.05)
+            assert result["mode"] == "orphan"
+        except AttributeError as e:
+            assert False, f"Old undo format caused AttributeError: {e}"
+        record("T-ORPHAN-03: old dict undo format migrated without crash", True)
+
+
 ORPHAN_TESTS = [
     ("T-ORPHAN-01: orphan mode relinks isolated chat note", test_orphan_relinks_isolated_note),
     ("T-ORPHAN-02: notes with outgoing links or backlinks are skipped", test_orphan_skips_linked_notes),
+    ("T-ORPHAN-03: old dict undo format migrated without crash", test_orphan_old_undo_format),
 ]
 
 

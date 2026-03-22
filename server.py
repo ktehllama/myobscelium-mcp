@@ -1276,6 +1276,8 @@ def obsidian_relink(
         if not undo_file.exists():
             return {"mode": "undo", "status": "no_backup_found"}
         stack = json.loads(undo_file.read_text(encoding="utf-8"))
+        if isinstance(stack, dict):  # migrate old single-entry format
+            stack = [stack]
         if not stack:
             undo_file.unlink(missing_ok=True)
             return {"mode": "undo", "status": "no_backup_found"}
@@ -1346,6 +1348,8 @@ def obsidian_relink(
         if not entries:
             return {"mode": "normal", "note": target_str, "status": "no_matches"}
         stack = json.loads(undo_file.read_text(encoding="utf-8")) if undo_file.exists() else []
+        if isinstance(stack, dict):  # migrate old single-entry format
+            stack = [stack]
         stack.insert(0, {"timestamp": datetime.now().isoformat(), "mode": "normal",
                          "entries": [_capture_related_state(target)]})
         undo_file.write_text(json.dumps(stack[:5], indent=2), encoding="utf-8")
@@ -1420,6 +1424,8 @@ def obsidian_relink(
         if not entries:
             return {"mode": "extended", "note": target_str, "status": "no_matches"}
         stack = json.loads(undo_file.read_text(encoding="utf-8")) if undo_file.exists() else []
+        if isinstance(stack, dict):  # migrate old single-entry format
+            stack = [stack]
         stack.insert(0, {"timestamp": datetime.now().isoformat(), "mode": "extended",
                          "entries": [_capture_related_state(target)]})
         undo_file.write_text(json.dumps(stack[:5], indent=2), encoding="utf-8")
@@ -1478,6 +1484,8 @@ def obsidian_relink(
         # Snapshot all orphans for undo before touching any
         backup_entries = [_capture_related_state(f) for f in orphans]
         stack = json.loads(undo_file.read_text(encoding="utf-8")) if undo_file.exists() else []
+        if isinstance(stack, dict):  # migrate old single-entry format
+            stack = [stack]
         stack.insert(0, {"timestamp": datetime.now().isoformat(), "mode": "orphan",
                          "entries": backup_entries})
         undo_file.write_text(json.dumps(stack[:5], indent=2), encoding="utf-8")
