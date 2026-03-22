@@ -1259,7 +1259,7 @@ def obsidian_graph_walk(
 
 @mcp.tool()
 def obsidian_relink(
-    mode: Literal["normal", "extended", "full", "undo"] = "normal",
+    mode: Literal["normal", "extended", "full", "undo", "orphan"] = "normal",
     min_score: float = RELINK_MIN_SCORE,
     exclude_folders: list[str] | None = None,
     smart: bool = False,
@@ -1426,6 +1426,108 @@ def obsidian_relink(
         status = _apply_relink(target, entries)
         return {"mode": "extended", "note": target_str, "status": status, "links_considered": len(entries)}
 
+    if mode == "orphan":
+        if not chats_path.is_dir():
+            raise ToolError(f"Chats folder not found: {CHATS_FOLDER}")
+        chat_notes = [
+            f for f in chats_path.rglob("*.md")
+            if not any(part.startswith(".") for part in f.relative_to(VAULT_PATH).parts)
+            and not _is_excluded(str(f.relative_to(VAULT_PATH)))
+        ]
+        if not chat_notes:
+            return {"mode": "orphan", "status": "no_notes_found", "orphans": []}
+
+        # Build reverse index: stem → set of files that link to it
+        reverse_index: dict[str, set[str]] = {}
+        for md_file in VAULT_PATH.rglob("*.md"):
+            if any(part.startswith(".") for part in md_file.relative_to(VAULT_PATH).parts):
+                continue
+            try:
+                text = md_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for stem in _parse_wikilinks(text):
+                reverse_index.setdefault(stem.lower(), set()).add(str(md_file.relative_to(VAULT_PATH)))
+
+        # Find orphans: no outgoing links AND no backlinks
+        orphans = []
+        for note_file in chat_notes:
+            try:
+                content = note_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            has_outgoing = bool(_parse_wikilinks(content))
+            has_backlinks = bool(reverse_index.get(note_file.stem.lower()))
+            if not has_outgoing and not has_backlinks:
+                orphans.append(note_file)
+
+        if not orphans:
+            return {"mode": "orphan", "status": "no_orphans", "orphans": []}
+
+        # MOC setup (same as extended)
+        moc_map = _build_moc_map()
+        moc_note_paths = set(moc_map.values())
+        moc_wikilinks: dict[str, set[str]] = {}
+        for folder_str, moc_path in moc_map.items():
+            try:
+                moc_text = moc_path.read_text(encoding="utf-8")
+                moc_wikilinks[folder_str] = set(_parse_wikilinks(moc_text))
+            except (OSError, UnicodeDecodeError):
+                moc_wikilinks[folder_str] = set()
+
+        # Snapshot all orphans for undo before touching any
+        backup_entries = [_capture_related_state(f) for f in orphans]
+        stack = json.loads(undo_file.read_text(encoding="utf-8")) if undo_file.exists() else []
+        stack.insert(0, {"timestamp": datetime.now().isoformat(), "mode": "orphan",
+                         "entries": backup_entries})
+        undo_file.write_text(json.dumps(stack[:5], indent=2), encoding="utf-8")
+
+        updated = 0
+        no_matches = 0
+        errors: list[dict] = []
+        processed = []
+        for note_file in orphans:
+            if note_file in moc_note_paths:
+                continue
+            note_str = str(note_file.relative_to(VAULT_PATH))
+            try:
+                result = _find_related_core(note_str, top_k=10, min_score=min_score)
+            except Exception as e:
+                errors.append({"p": note_str, "error": str(e)})
+                continue
+            related = []
+            for r in result["related"]:
+                if _is_excluded(r[K_PATH]):
+                    continue
+                if not _passes_tag_filter(r["shared_tags"], note_file.stem, Path(r[K_PATH]).stem):
+                    continue
+                candidate_path = VAULT_PATH / r[K_PATH]
+                if candidate_path.parent == note_file.parent:
+                    folder_str = str(note_file.parent)
+                    if folder_str in moc_map:
+                        moc_links = moc_wikilinks.get(folder_str, set())
+                        if note_file.stem in moc_links and candidate_path.stem in moc_links:
+                            continue
+                related.append(r)
+            entries = [_format_related_entry(r["title"], r["shared_tags"]) for r in related]
+            if not entries:
+                no_matches += 1
+                processed.append({"p": note_str, "status": "no_matches"})
+                continue
+            status = _apply_relink(note_file, entries)
+            if status == "updated":
+                updated += 1
+            processed.append({"p": note_str, "status": status})
+
+        return {
+            "mode": "orphan",
+            "orphans_found": len(orphans),
+            "updated": updated,
+            "no_matches": no_matches,
+            "errors": errors,
+            "processed": processed,
+        }
+
     # mode == "full"
     if smart:
         raise ToolError("smart=True is only supported with mode='normal' or mode='extended'")
@@ -1588,7 +1690,7 @@ def obsidian_help(topic: str = "") -> dict:
                 "when": "Working with the vault's link graph.",
                 "tips": [
                     "graph_walk: traverses EXISTING [[wikilinks]] outward from a note. Different from find_related — graph_walk follows links you already made, find_related discovers new connections via scoring. Use direction='both' to see what links to+from a note; direction='out' for what a note points to; direction='in' for backlinks. include_l0=True adds one-line summaries to each discovered node. Great for building context: graph_walk from the most recent note → degree-1 = primary context, degree-2 = secondary.",
-                    "relink: auto-populates ## Related sections with scored links. mode='normal' relinks the most recent chat note (Claude/Chats only); mode='extended' relinks the most recent chat note against the full vault with MOC-aware suppression — use this after saving a chat to connect it to your broader notes; mode='full' scans and relinks every note in the vault (slow, use sparingly); mode='undo' reverts the last relink (up to 5 deep). smart=True returns candidates for human review without writing. MOC-aware: notes in a folder with a Map of Content won't get redundant intra-group links.",
+                    "relink: auto-populates ## Related sections with scored links. mode='normal' relinks the most recent chat note (Claude/Chats only); mode='extended' relinks the most recent chat note against the full vault with MOC-aware suppression — use after saving a chat to connect it to broader notes; mode='orphan' finds ALL chat notes with zero outgoing links AND zero backlinks and relinks them vault-wide — use to catch forgotten chats without running full; mode='full' scans and relinks every note in the vault (slow, use sparingly); mode='undo' reverts the last relink (up to 5 deep). smart=True returns candidates for human review without writing. MOC-aware: notes in a folder with a Map of Content won't get redundant intra-group links.",
                     "backfill_summaries: generates l0/l1 for notes that are missing them. Calls Claude via claude_code_sdk — may fail silently if SDK can't nest sessions. Use limit param to avoid runaway calls. Errors appear in the errors[] list.",
                 ],
             },
