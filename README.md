@@ -123,3 +123,7 @@ Set `OBSIDIAN_VAULT_PATH` to your vault root, then add to your Claude Desktop `c
 ```
 
 Full configuration reference and all 19 tools documented in [`docs/TECHNICAL.md`](docs/TECHNICAL.md).
+
+---
+
+© 2025 Matheo. All rights reserved. No permission is granted to copy, use, modify, or distribute any part of this code, for any purpose, without explicit written permission from the author.
