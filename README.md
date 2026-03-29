@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/myobscelium-logo.svg" width="140" alt="Myobscelium">
+<img src="docs/obsi_logo.png" width="220" alt="Myobscelium">
 
 # Myobscelium
 
