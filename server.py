@@ -508,7 +508,8 @@ def _inject_summary_into_frontmatter(text: str, l0: str, l1: str) -> str:
 def _is_moc(path: Path) -> bool:
     """Return True if note is a Map of Content."""
     moc_keywords = {"moc", "index", "overview", "hub"}
-    if any(kw in path.stem.lower() for kw in moc_keywords):
+    stem_lower = path.stem.lower()
+    if any(re.search(r'\b' + kw + r'\b', stem_lower) for kw in moc_keywords):
         return True
     fm = _parse_frontmatter(path) or {}
     if str(fm.get("type", "")).lower() == "moc":
@@ -525,7 +526,7 @@ def _is_moc(path: Path) -> bool:
             found = _resolve_wikilink(stem)
             if found:
                 targets.append(str(found.parent))
-        if targets and len(set(targets)) == 1:
+        if targets and len(set(targets)) == 1 and set(targets) != {str(path.parent)}:
             return True
     return False
 
