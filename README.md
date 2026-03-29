@@ -12,8 +12,10 @@ A Model Context Protocol (MCP) server that bridges Claude Desktop and your Obsid
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/obsidian-claude-mcp.git
-cd obsidian-claude-mcp
+git clone https://github.com/ktehllama/myobscelium-mcp.git
+cd myobscelium-mcp
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -25,12 +27,13 @@ Add the server to Claude Desktop's configuration file.
 
 **Windows** — `%APPDATA%\Claude\claude_desktop_config.json`
 
+**macOS/Linux:**
 ```json
 {
   "mcpServers": {
     "obsidian": {
-      "command": "python",
-      "args": ["/absolute/path/to/obsidian-claude-mcp/server.py"],
+      "command": "/absolute/path/to/myobscelium-mcp/venv/bin/python",
+      "args": ["/absolute/path/to/myobscelium-mcp/server.py"],
       "env": {
         "OBSIDIAN_VAULT_PATH": "/absolute/path/to/your/vault"
       }
@@ -39,14 +42,13 @@ Add the server to Claude Desktop's configuration file.
 }
 ```
 
-On Windows, use forward slashes or escaped backslashes in paths:
-
+**Windows:**
 ```json
 {
   "mcpServers": {
     "obsidian": {
-      "command": "python",
-      "args": ["C:/Users/you/projects/obsidian-claude-mcp/server.py"],
+      "command": "C:/Users/you/projects/myobscelium-mcp/venv/Scripts/python.exe",
+      "args": ["C:/Users/you/projects/myobscelium-mcp/server.py"],
       "env": {
         "OBSIDIAN_VAULT_PATH": "C:/Users/you/MyVault"
       }
@@ -62,7 +64,7 @@ Restart Claude Desktop after saving the configuration file.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `OBSIDIAN_VAULT_PATH` | Yes | — | Absolute path to your Obsidian vault root |
-| `OBSIDIAN_CHATS_FOLDER` | No | `Chats` | Vault folder where saved conversations are stored |
+| `OBSIDIAN_CHATS_FOLDER` | No | `Claude/Chats` | Vault folder where saved conversations are stored |
 | `OBSIDIAN_DAILY_FOLDER` | No | `Daily` | Vault folder for daily notes (informational; not auto-created) |
 
 ## Recommended Vault Structure
@@ -86,26 +88,38 @@ YourVault/
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `obsidian_vault_overview` | Return folder structure with note counts | `mode` (`compact`/`tree`), `max_depth` |
-| `obsidian_read_note` | Read a note, optionally by line range | `path`, `line_start`, `line_end` |
+| `obsidian_read_note` | Read a note, optionally by line range or summary only | `path`, `line_start`, `line_end`, `summary_only` |
 | `obsidian_read_frontmatter` | Read only the YAML frontmatter of a note | `path` |
-| `obsidian_write_note` | Create or overwrite a note | `path`, `content`, `overwrite` |
-| `obsidian_append_to_note` | Append content to a note, creating it if absent | `path`, `content`, `add_separator` |
+| `obsidian_write_note` | Create or overwrite a note | `path`, `content`, `overwrite`, `l0`, `l1` |
+| `obsidian_append_to_note` | Append content to a note, creating it if absent | `path`, `content`, `add_separator`, `before_section` |
 | `obsidian_move_note` | Move or rename a note | `from_path`, `to_path` |
 | `obsidian_delete_note` | Delete a note (requires explicit confirmation) | `path`, `confirm` |
-| `obsidian_list_folder` | List notes and subfolders in a vault folder | `folder`, `include_preview` |
-| `obsidian_save_chat` | Save a Claude conversation as a formatted note | `title`, `summary`, `content`, `tags`, `project`, `folder` |
-| `obsidian_search` | Full-text search across vault notes | `query`, `folder`, `case_sensitive`, `max_results` |
-| `obsidian_batch` | Execute multiple write/move/delete operations in one call | `operations` (list of op dicts) |
+| `obsidian_list_folder` | List notes and subfolders in a vault folder | `folder`, `recursive`, `names_only`, `include_preview` |
+| `obsidian_save_chat` | Save a Claude conversation as a structured note | `title`, `summary`, `content`, `tags`, `project`, `folder`, `l0`, `l1`, `custom_date` |
+| `obsidian_search` | Full-text search across vault notes | `query`, `folder`, `tags`, `tier`, `max_results` |
+| `obsidian_batch` | Execute multiple operations in one call | `operations` (list of op dicts) |
+| `obsidian_patch_frontmatter` | Merge or remove keys in a note's YAML frontmatter | `path`, `updates`, `remove_keys` |
+| `obsidian_move_folder` | Move an entire folder to a new location | `from_folder`, `to_folder`, `overwrite` |
+| `obsidian_find_related` | Discover topically related notes via IDF scoring | `path`, `top_k`, `folder`, `min_score` |
+| `obsidian_patch_section` | Replace, delete, or insert a heading section or text | `path`, `match`, `match_type`, `content`, `heading_level` |
+| `obsidian_backfill_summaries` | Generate missing or stale l0/l1 summaries across vault | `folder`, `limit`, `overwrite_stale_days` |
+| `obsidian_graph_walk` | BFS traversal of note links up to a given depth | `path`, `depth`, `direction`, `include_l0` |
+| `obsidian_relink` | Build and maintain `## Related` sections across notes | `mode`, `min_score`, `exclude_folders`, `smart` |
+| `obsidian_help` | Return usage guide for all tools | `topic` |
 
 ### obsidian_batch Operation Format
 
-Each operation in the `operations` list is a dict with an `op` field set to `"write"`, `"move"`, or `"delete"`:
+Each operation is a dict with an `op` field. Supported types:
 
 ```json
 [
-  {"op": "write", "path": "Notes/foo.md", "content": "# Foo", "overwrite": false},
-  {"op": "move",  "path": "Notes/old.md", "to": "Archive/old.md"},
-  {"op": "delete","path": "Notes/tmp.md", "confirm": true}
+  {"op": "write",         "path": "Notes/foo.md", "content": "# Foo", "overwrite": false},
+  {"op": "append",        "path": "Notes/foo.md", "content": "more", "add_separator": false},
+  {"op": "move",          "path": "Notes/old.md", "to": "Archive/old.md"},
+  {"op": "delete",        "path": "Notes/tmp.md", "confirm": true},
+  {"op": "patch_section", "path": "Notes/foo.md", "match": "Summary", "match_type": "heading", "content": "..."},
+  {"op": "find_related",  "path": "Notes/foo.md", "max_results": 10},
+  {"op": "save_chat",     "title": "...", "summary": "...", "content": "..."}
 ]
 ```
 
