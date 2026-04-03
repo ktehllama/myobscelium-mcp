@@ -861,8 +861,15 @@ def obsidian_save_chat(
     l0: str = "",
     l1: str = "",
     custom_date: str | None = None,
+    mode: Literal["normal", "condensed", "ultra"] = "normal",
 ) -> dict:
-    """Save a Claude conversation. Always provide l0 (≤25-word one-sentence summary) and l1 (2-3 sentence ~80-word overview) — written to frontmatter for tiered retrieval. custom_date: YYYY-MM-DD to override today's date."""
+    """Save a Claude conversation to Obsidian. Always provide l0 (≤25-word one-sentence summary) and l1 (2-3 sentence ~80-word overview) — written to frontmatter for tiered retrieval. custom_date: YYYY-MM-DD to override today's date.
+
+    mode controls how you should format the `content` field:
+    - "normal" (default): no format imposed — use your best judgment
+    - "condensed": bullets only — ## Summary (context + what + outcome) and ## Takeaways (insights, gotchas, small-but-important details, next steps); omit ## Takeaways only if truly nothing notable
+    - "ultra": single YAML block, machine-readable only, no prose — keys: topic, ctx, did, out, files, insights, next; include all applicable keys
+    """
     return _save_chat_core(title, summary, content, tags, project, folder, l0, l1, custom_date)
 
 
