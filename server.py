@@ -375,8 +375,12 @@ def _apply_relink(note_path: Path, new_entries: list[str], vault_stems: set[str]
     valid_existing = []
     for line in existing_lines:
         m = re.search(r'\[\[([^\]]+)\]\]', line)
-        if m and m.group(1) in vault_stems:
-            valid_existing.append(line)
+        if m:
+            if m.group(1) in vault_stems:
+                valid_existing.append(line)
+            # else: stale wikilink to a deleted/renamed note — drop intentionally
+        else:
+            valid_existing.append(line)  # manual annotation without a wikilink — preserve
 
     current_titles: set[str] = set()
     for line in valid_existing:
@@ -1304,7 +1308,7 @@ def obsidian_relink(
     exclude_folders: list[str] | None = None,
     smart: bool = False,
 ) -> dict:
-    """Automate building and maintaining ## Related sections across notes. mode='extended' links the most recent chat note to the full vault with MOC-aware suppression (like full, but single note only)."""
+    """Automate building and maintaining ## Related sections across notes. mode='extended' links the most recent chat note to the full vault with MOC-aware suppression (like full, but single note only). WARNING: mode='full' rewrites Related sections across the ENTIRE vault — always ask the user for explicit confirmation before running it."""
     undo_file = VAULT_PATH / ".relink-undo.json"
     excluded = [f.replace("\\", "/").rstrip("/") for f in (exclude_folders or [])]
 
@@ -1580,6 +1584,9 @@ def obsidian_relink(
         }
 
     # mode == "full"
+    # ⚠️  IMPACTFUL OPERATION — rewrites Related sections across the ENTIRE vault.
+    # You MUST get explicit user confirmation before calling this. Do not run speculatively
+    # or as part of a routine pass. The undo stack only holds 5 entries.
     if smart:
         raise ToolError("smart=True is only supported with mode='normal' or mode='extended'")
 
