@@ -868,7 +868,7 @@ def obsidian_save_chat(
     mode controls how you should format the `content` field:
     - "normal" (default): no format imposed — use your best judgment
     - "condensed": bullets only — ## Summary (context + what + outcome) and ## Takeaways (insights, gotchas, small-but-important details, next steps); omit ## Takeaways only if truly nothing notable
-    - "ultra": single YAML block, maximum token density — no prose, no full sentences, no block lists. Use inline lists [a, b], verb:noun notation, | for alternatives (e.g. cause:evap|convection), snake_case, abbreviate freely. Keys: topic, ctx, did, out, files, insights, next — omit any key whose value is empty
+    - "ultra": pipe-notation flat log — no YAML, no structure tokens. Format: ALL_CAPS_KEY: value1 | value2 | value3, use = for definitions (e.g. RED40=petroleum-azo|sulfonation→coupling), | to separate items within a line, → for processes/flows, abbreviate freely. Pack multiple related facts per line under one thematic key. Omit any key with no value. Example line: INSIGHTS: mpemba:no_consensus | causes:evap|dissolved_gas|convection|H-bond | water:thermo_anomaly
     """
     return _save_chat_core(title, summary, content, tags, project, folder, l0, l1, custom_date)
 
