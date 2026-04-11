@@ -619,31 +619,62 @@ def obsidian_vault_overview(mode: Literal["compact", "tree"] = "compact", max_de
 @mcp.tool()
 def obsidian_read_note(
     path: str,
+    full: bool = False,
     line_start: int | None = None,
     line_end: int | None = None,
-    summary_only: bool = False,
 ) -> dict:
-    """Read a vault note, optionally by line range or summary-only mode."""
+    """Read a vault note.
+
+    Default (full=False): returns the note's l0 and l1 summary fields — a cheap orientation
+    layer, NOT the full file. l0 is a single sentence; l1 is 2-3 sentences. Use this first.
+    If the note has no summary fields, automatically returns the full content instead.
+
+    If you need more context after reading the summary, call again with full=True.
+    NEVER stay with doubts — even the tiniest uncertainty about the note's content means
+    you should call full=True immediately. Correctness always supersedes token efficiency.
+
+    full=True supports line_start/line_end to read a specific line range.
+    """
     p = vault_path(path)
     if not p.exists():
         raise ToolError(f"Note not found: {path}")
-    if summary_only:
-        fm = _parse_frontmatter(p) or {}
-        total = len(p.read_text(encoding="utf-8").splitlines())
-        return {
-            K_PATH: path,
-            K_L0: str(fm.get("l0", "") or ""),
-            "l1": str(fm.get("l1", "") or ""),
-            K_LINES: total,
-        }
-    lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    # --- LEGACY: summary_only param (replaced by default summary behaviour) ---
+    # if summary_only:
+    #     fm = _parse_frontmatter(p) or {}
+    #     total = len(p.read_text(encoding="utf-8").splitlines())
+    #     return {
+    #         K_PATH: path,
+    #         K_L0: str(fm.get("l0", "") or ""),
+    #         "l1": str(fm.get("l1", "") or ""),
+    #         K_LINES: total,
+    #     }
+    # ---
+
+    text = p.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
     total = len(lines)
+
+    if not full:
+        fm = _parse_frontmatter(p) or {}
+        l0 = str(fm.get("l0", "") or "")
+        l1 = str(fm.get("l1", "") or "")
+        if l0 or l1:
+            return {
+                K_PATH: path,
+                "mode": "summary — NOT the full file. Call full=True if you need more context.",
+                "l0 (one sentence)": l0,
+                "l1 (2-3 sentences)": l1,
+                K_LINES: total,
+            }
+        # No summary found — fall through to full content to avoid returning nothing useful
+
     if line_start is not None or line_end is not None:
         s = (line_start - 1) if line_start else 0
         e = line_end if line_end else total
         content = "".join(lines[s:e])
     else:
-        content = "".join(lines)
+        content = text
     return {"p": path, "content": content, "total_lines": total}
 
 
@@ -1710,7 +1741,7 @@ def obsidian_help(topic: str = "") -> dict:
                 "when": "Exploring structure or loading note content.",
                 "tips": [
                     "vault_overview: start of a session to orient — use mode='compact' (default) to save tokens, mode='tree' for visual layout.",
-                    "read_note: use summary_only=True to get only l0+l1+line_count without loading the body — good for deciding whether to load full.",
+                    "read_note: always returns l0+l1 summary by default (NOT the full file) — use this first to orient. Call with full=True only if the summary isn't enough. If the note has no summary fields, full content is returned automatically.",
                     "read_frontmatter: cheapest way to check tags, project, l0/l1 without any body content.",
                     "list_folder: use names_only=True for a flat path list when you just need to know what exists; include_preview=True when you want a snippet of each note.",
                 ],
@@ -1755,13 +1786,13 @@ def obsidian_help(topic: str = "") -> dict:
             },
         },
         "tier_system": {
-            "l0": "1-sentence frontmatter field (~25 words). Used by find_related for cheap scanning. Read via read_frontmatter or summary_only=True.",
-            "l1": "2-3 sentence frontmatter field (~80 words). The human-readable orientation layer. Read via read_frontmatter or summary_only=True.",
-            "l2": "The full note body. Only loaded when you actually call read_note without summary_only. Dense machine notation is preferred over prose for chat saves — higher keyword density = better retrieval scores.",
+            "l0": "1-sentence frontmatter field (~25 words). Used by find_related for cheap scanning. Read via read_frontmatter or read_note (returned by default).",
+            "l1": "2-3 sentence frontmatter field (~80 words). The human-readable orientation layer. Read via read_frontmatter or read_note (returned by default).",
+            "l2": "The full note body. Only loaded when you call read_note(full=True). Dense machine notation is preferred over prose for chat saves — higher keyword density = better retrieval scores.",
             "when_to_use_each": "Start with l0 (scan many notes cheaply) → escalate to l1 (understand the note) → escalate to l2 (full content) only for notes that are definitely relevant.",
         },
         "common_workflows": {
-            "start_of_session": "vault_overview → graph_walk from most recent relevant note (depth=2, include_l0=True) → read_note(summary_only=True) on interesting neighbors → read_note full on the 1-2 most relevant",
+            "start_of_session": "vault_overview → graph_walk from most recent relevant note (depth=2, include_l0=True) → read_note on interesting neighbors (returns l0+l1 summary by default) → read_note(full=True) on the 1-2 most relevant",
             "save_a_chat": "obsidian_save_chat with title, summary, content (dense notation), tags, project, l0, l1. Use custom_date for old chats.",
             "save_multiple_old_chats": "obsidian_batch with list of save_chat ops, each with custom_date set",
             "rename_a_note": "obsidian_move_note(from_path='Folder/OldName.md', to_path='Folder/NewName.md')",
