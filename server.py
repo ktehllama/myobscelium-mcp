@@ -99,7 +99,7 @@ def _parse_frontmatter(p: Path) -> dict | None:
     block = head[4:end]
     try:
         return yaml.safe_load(block) or {}
-    except yaml.YAMLError:
+    except (yaml.YAMLError, ValueError):
         return None
 
 
