@@ -120,12 +120,13 @@ def test_anchor_end_not_found_raises(vault):
 
 def test_empty_range_after_offsets_raises(vault):
     """Effective start > effective end raises ToolError."""
-    content = "## A\n## B\n"
+    content = "line0\n## A\nline2\n## B\n"
     path = make_note(vault, "note.md", content)
-    # anchor_start at index 0, offset +5 → effective start = 5
-    # anchor_end at index 1, offset 0  → effective end = 1
-    # start > end → error
+    # ## A at index 1, offset +3 → clamped to index 3 (effective start = 3)
+    # ## B at index 3, offset -2 → index 1 (effective end = 1)
+    # start (3) > end (1) → error
     with pytest.raises(Exception, match="empty"):
         server.obsidian_read_note(
-            path, anchor_start="## A", anchor_start_offset=5, anchor_end="## B"
+            path, anchor_start="## A", anchor_start_offset=3,
+            anchor_end="## B", anchor_end_offset=-2,
         )
