@@ -1778,7 +1778,7 @@ def obsidian_help(topic: str = "") -> dict:
                 "when": "Exploring structure or loading note content.",
                 "tips": [
                     "vault_overview: start of a session to orient — use mode='compact' (default) to save tokens, mode='tree' for visual layout.",
-                    "read_note: always returns l0+l1 summary by default (NOT the full file) — use this first to orient. Call with full=True only if the summary isn't enough. If the note has no summary fields, full content is returned automatically.",
+                    "read_note: always returns l0+l1 summary by default (NOT the full file) — use this first to orient. Call with full=True only if the summary isn't enough. If the note has no summary fields, full content is returned automatically. Anchor mode: pass anchor_start='## Heading' (and optionally anchor_end + integer offsets) to slice a specific section by text rather than line numbers — bypasses summary tier automatically.",
                     "read_frontmatter: cheapest way to check tags, project, l0/l1 without any body content.",
                     "list_folder: use names_only=True for a flat path list when you just need to know what exists; include_preview=True when you want a snippet of each note.",
                 ],
