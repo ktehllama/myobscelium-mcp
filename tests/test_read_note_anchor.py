@@ -14,5 +14,6 @@ def vault(tmp_path, monkeypatch):
 def make_note(vault: Path, name: str, content: str) -> str:
     """Write content to vault/name and return the relative path string."""
     p = vault / name
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return name
