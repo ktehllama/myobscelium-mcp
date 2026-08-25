@@ -616,12 +616,29 @@ def obsidian_vault_overview(mode: Literal["compact", "tree"] = "compact", max_de
         return {"tree": "\n".join(lines)}
 
 
+def _resolve_anchor(lines: list[str], anchor_text: str, offset: int) -> int:
+    """Return the effective line index for an anchor.
+
+    Scans lines for the first line that starts with anchor_text (case-sensitive).
+    Applies offset (positive = down, negative = up). Clamps to [0, len(lines)-1].
+    Raises ToolError if anchor_text is not found.
+    """
+    for i, line in enumerate(lines):
+        if line.startswith(anchor_text):
+            return max(0, min(len(lines) - 1, i + offset))
+    raise ToolError(f"Anchor not found: {anchor_text!r}")
+
+
 @mcp.tool()
 def obsidian_read_note(
     path: str,
     full: bool = False,
     line_start: int | None = None,
     line_end: int | None = None,
+    anchor_start: str | None = None,
+    anchor_start_offset: int = 0,
+    anchor_end: str | None = None,
+    anchor_end_offset: int = 0,
 ) -> dict:
     """Read a vault note.
 
@@ -634,6 +651,12 @@ def obsidian_read_note(
     you should call full=True immediately. Correctness always supersedes token efficiency.
 
     full=True supports line_start/line_end to read a specific line range.
+
+    Anchor mode: set anchor_start to a string that the target line must start with
+    (case-sensitive, first match). The slice runs from that line to anchor_end (or EOF).
+    Both anchors support an integer offset to shift the effective boundary up (negative)
+    or down (positive). Both effective boundaries are inclusive. Raises ToolError if an
+    anchor is not found or if the effective range is empty after applying offsets.
     """
     p = vault_path(path)
     if not p.exists():
@@ -654,6 +677,20 @@ def obsidian_read_note(
     text = p.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
     total = len(lines)
+
+    if anchor_start is not None:
+        start_idx = _resolve_anchor(lines, anchor_start, anchor_start_offset)
+        if anchor_end is not None:
+            end_idx = _resolve_anchor(lines, anchor_end, anchor_end_offset)
+        else:
+            end_idx = total - 1
+        if start_idx > end_idx:
+            raise ToolError(
+                f"Anchor range is empty after applying offsets "
+                f"(effective start={start_idx + 1}, end={end_idx + 1})"
+            )
+        content = "".join(lines[start_idx : end_idx + 1])
+        return {"p": path, "content": content, "total_lines": total}
 
     if not full:
         fm = _parse_frontmatter(p) or {}
