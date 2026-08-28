@@ -62,6 +62,27 @@ def vault_path(relative: str) -> Path:
 
 # --- Private helpers (shared by tools and obsidian_batch) ---
 
+_TOOL_CALL_LEAK_MARKERS = [
+    '<' + '/content>',
+    '<parameter name=',
+    '<' + '/parameter>',
+    '<function_calls>',
+    '<' + '/function_calls>',
+    '<invoke name=',
+    '<' + '/invoke>',
+]
+
+
+def _assert_no_tool_call_leak(text: str) -> None:
+    for marker in _TOOL_CALL_LEAK_MARKERS:
+        if marker in text:
+            raise ToolError(
+                f'content contains literal tool-call syntax ({marker!r}); '
+                'this usually means a parameter boundary was mistyped. '
+                'Reconstruct and resend the call with corrected parameter tags.'
+            )
+
+
 def _write_note(p: Path, content: str, overwrite: bool) -> bool:
     """Returns True if created new, False if overwritten."""
     existed = p.exists()
@@ -734,6 +755,7 @@ def obsidian_write_note(
     l1: str = "",
 ) -> dict:
     """Create or overwrite a vault note. Provide l0 (≤25-word summary) and l1 (2-3 sentence overview) for notes with meaningful content — written to frontmatter for tiered retrieval."""
+    _assert_no_tool_call_leak(content)
     p = vault_path(path)
     # Auto-generate summaries if content has frontmatter, body >200 chars, and l0 not provided
     if content.startswith("---\n") and not l0:
@@ -763,6 +785,7 @@ def obsidian_append_to_note(
     before_section: str | None = None,
 ) -> dict:
     """Append content to a vault note, creating it if absent. before_section inserts before the matching heading."""
+    _assert_no_tool_call_leak(content)
     p = vault_path(path)
     if before_section and p.exists():
         text = p.read_text(encoding="utf-8")
@@ -1225,6 +1248,7 @@ def obsidian_patch_section(
     create_if_missing: bool = True,
 ) -> dict:
     """Surgical content editor: replace heading body, delete section, or find-and-replace text."""
+    _assert_no_tool_call_leak(content)
     p = vault_path(path)
     status = _patch_section(p, match, match_type, content, heading_level=heading_level, create_if_missing=create_if_missing)
     return {"p": path, "status": status}
