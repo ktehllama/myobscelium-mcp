@@ -17,7 +17,7 @@ except ImportError:
 from skills import register_skills
 
 # --- Config ---
-VAULT_PATH = Path(os.getenv("OBSIDIAN_VAULT_PATH", r"C:\Users\mathe\Documents\Obsidian Vault")).resolve()
+VAULT_PATH = Path(os.getenv("OBSIDIAN_VAULT_PATH", "~/Documents/Obsidian Vault")).expanduser().resolve()
 CHATS_FOLDER = os.getenv("OBSIDIAN_CHATS_FOLDER", "Claude/Chats")
 DAILY_FOLDER = os.getenv("OBSIDIAN_DAILY_FOLDER", "Daily")
 
